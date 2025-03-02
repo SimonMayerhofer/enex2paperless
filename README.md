@@ -28,6 +28,7 @@ Flags:
   -h, --help                  help for enex2paperless
   -n, --nocolor               Disable colored output
   -o, --outputfolder string   Output attachements to this folder, NOT paperless.
+  -u, --unzip                 Unzip .zip files found in notes
   -t, --tag string            Additional tag to add to all files. .enex filename is used if string is empty.
   -v, --verbose               Enable verbose logging
 ```
@@ -113,6 +114,16 @@ enex2paperless.exe MyEnexFile.enex -t ""
 ```
 
 This will add "MyEnexFile" as a tag to all processed files. If you don't use the `-t` flag at all, no additional tag will be added, and only the original Evernote tags will be preserved.
+
+### Unzip Attachments
+
+You can automatically extract any zip files found in the notes using the `-u` or `--unzip` flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex -u
+```
+
+If using the Output To Folder functionality this will create a subfolder for each zip file, named after the zip file (without the .zip extension), and extract its contents there.
 
 ### Verbose Logging
 

@@ -28,6 +28,7 @@ type Config struct {
 	FileTypes    []string `validate:"required"`
 	OutputFolder string
 	AdditionalTag string
+	Unzip        bool
 }
 
 // GetConfig initializes and returns the application configuration.
@@ -94,5 +95,10 @@ func SetOutputFolder(path string) error {
 
 func SetAdditionalTag(tag string) error {
 	settings.AdditionalTag = tag
+	return nil
+}
+
+func SetUnzip(unzip bool) error {
+	settings.Unzip = unzip
 	return nil
 }
