@@ -482,7 +482,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 				if err != nil {
 					failedNoteChannel <- note
 					slog.Error("failed to check for tag", "error", err)
-					break resourceLoop
+					break
 				}
 
 				if id == 0 {
@@ -491,7 +491,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					if err != nil {
 						failedNoteChannel <- note
 						slog.Error("couldn't create tag", "error", err.Error())
-						break resourceLoop
+						break
 					}
 				} else {
 					slog.Debug(fmt.Sprintf("found tag: %s with ID: %v", tagName, id))
@@ -506,7 +506,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 				if err != nil {
 					failedNoteChannel <- note
 					slog.Error("failed to check for additional tag", "error", err)
-					break resourceLoop
+					break
 				}
 
 				if id == 0 {
@@ -515,7 +515,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					if err != nil {
 						failedNoteChannel <- note
 						slog.Error("couldn't create additional tag", "error", err.Error())
-						break resourceLoop
+						break
 					}
 				} else {
 					slog.Debug(fmt.Sprintf("found additional tag: %s with ID: %v", settings.AdditionalTag, id))
