@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"enex2paperless/internal/config"
 	"enex2paperless/pkg/paperless"
@@ -19,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/afero"
 )
@@ -146,24 +148,27 @@ func getExtensionFromMimeType(mimeType string) (string, error) {
 }
 
 // uploadFileToPaperless handles the common upload logic for both regular and extracted files
-func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType string, data []byte, note Note, url string, failedNoteChannel chan Note) error {
+func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType string, data []byte, note Note, url string, failedNoteChannel chan Note) (int, error) {
 	// Create a new buffer and multipart writer for form
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
+	var bodyBytes []byte
+	var err error
+	var docIDStr string
 
 	// Set form fields
-	err := writer.WriteField("title", title)
+	err = writer.WriteField("title", title)
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("error setting form fields", "error", err)
-		return fmt.Errorf("error setting form fields: %v", err)
+		return 0, fmt.Errorf("error setting form fields: %v", err)
 	}
 
 	formattedCreatedDate, err := paperless.ConvertDateFormat(note.Created)
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("error converting date format", "error", err)
-		return fmt.Errorf("error converting date format: %v", err)
+		return 0, fmt.Errorf("error converting date format: %v", err)
 	}
 	_ = writer.WriteField("created", formattedCreatedDate)
 
@@ -174,7 +179,7 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 		if err != nil {
 			failedNoteChannel <- note
 			slog.Error("failed to check for tag", "error", err)
-			return fmt.Errorf("failed to check for tag: %v", err)
+			return 0, fmt.Errorf("failed to check for tag: %v", err)
 		}
 
 		if id == 0 {
@@ -183,7 +188,7 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 			if err != nil {
 				failedNoteChannel <- note
 				slog.Error("couldn't create tag", "error", err)
-				return fmt.Errorf("couldn't create tag: %v", err)
+				return 0, fmt.Errorf("couldn't create tag: %v", err)
 			}
 		} else {
 			slog.Debug(fmt.Sprintf("found tag: %s with ID: %v", tagName, id))
@@ -198,7 +203,7 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 		if err != nil {
 			failedNoteChannel <- note
 			slog.Error("couldn't write fields", "error", err)
-			return fmt.Errorf("couldn't write fields: %v", err)
+			return 0, fmt.Errorf("couldn't write fields: %v", err)
 		}
 	}
 
@@ -212,14 +217,14 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("error creating multipart writer", "error", err)
-		return fmt.Errorf("error creating multipart writer: %v", err)
+		return 0, fmt.Errorf("error creating multipart writer: %v", err)
 	}
 
 	_, err = io.Copy(part, bytes.NewReader(data))
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("error writing file data", "error", err)
-		return fmt.Errorf("error writing file data: %v", err)
+		return 0, fmt.Errorf("error writing file data: %v", err)
 	}
 
 	// Close the writer to finish the multipart content
@@ -230,7 +235,7 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("error creating new HTTP request", "error", err)
-		return fmt.Errorf("error creating new HTTP request: %v", err)
+		return 0, fmt.Errorf("error creating new HTTP request: %v", err)
 	}
 
 	// Get settings for authentication
@@ -253,7 +258,7 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("error making POST request", "error", err)
-		return fmt.Errorf("error making POST request: %v", err)
+		return 0, fmt.Errorf("error making POST request: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -264,11 +269,182 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 		failedNoteChannel <- note
 		slog.Error("non 200 status code received", "status code", resp.StatusCode)
 		slog.Error("response:", "body", buf.String())
-		return fmt.Errorf("non 200 status code received (%d): %s", resp.StatusCode, buf.String())
+		return 0, fmt.Errorf("non 200 status code received (%d): %s", resp.StatusCode, buf.String())
 	}
 
-	e.Uploads.Add(1)
-	return nil
+	// Read the response body
+	bodyBytes, err = io.ReadAll(resp.Body)
+	if err != nil {
+		failedNoteChannel <- note
+		slog.Error("error reading response body", "error", err)
+		return 0, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	// Try to unmarshal as a string first (UUID)
+	if err := json.Unmarshal(bodyBytes, &docIDStr); err == nil {
+		// Successfully unmarshaled as string, convert to integer
+		slog.Debug("Response is a string",
+			"id", docIDStr,
+			"title", title,
+			"filename", fileName)
+
+		// Check the tasks endpoint to get the document ID
+		url := fmt.Sprintf("%s/api/tasks/?task_id=%s", settings.PaperlessAPI, docIDStr)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			failedNoteChannel <- note
+			slog.Error("error creating GET request", "error", err)
+			return 0, fmt.Errorf("error creating GET request: %v", err)
+		}
+
+		if settings.Token != "" {
+			req.Header.Set("Authorization", "Token "+settings.Token)
+		} else {
+			req.SetBasicAuth(settings.Username, settings.Password)
+		}
+
+		slog.Debug("Fetching task details",
+			"url", req.URL.String(),
+			"task_id", docIDStr,
+			"title", title,
+			"filename", fileName)
+
+		// Try up to 10 times with a 1-second delay between attempts
+		maxAttempts := 10
+		initialDelay := time.Second
+		maxDelay := 5 * time.Second
+		currentDelay := initialDelay
+
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			resp, err := e.client.Do(req)
+			if err != nil {
+				failedNoteChannel <- note
+				slog.Error("error getting task details", "error", err)
+				return 0, fmt.Errorf("error getting task details: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				failedNoteChannel <- note
+				slog.Error("error getting task details", "status code", resp.StatusCode)
+				return 0, fmt.Errorf("error getting task details: status code %d", resp.StatusCode)
+			}
+
+			// Read the response body
+			bodyBytes, err = io.ReadAll(resp.Body)
+			if err != nil {
+				failedNoteChannel <- note
+				slog.Error("error reading response body", "error", err)
+				return 0, fmt.Errorf("error reading response body: %v", err)
+			}
+
+			var taskList []map[string]interface{}
+			if err := json.Unmarshal(bodyBytes, &taskList); err != nil {
+				failedNoteChannel <- note
+				slog.Error("error decoding task list", "error", err)
+				return 0, fmt.Errorf("error decoding task list: %v", err)
+			}
+
+			if len(taskList) > 0 {
+				task := taskList[0]
+				status, ok := task["status"].(string)
+				if !ok {
+					failedNoteChannel <- note
+					slog.Error("invalid task status format", "task", task)
+					return 0, fmt.Errorf("invalid task status format")
+				}
+
+				// Log task status for debugging
+				slog.Debug("Task status check",
+					"attempt", attempt,
+					"max_attempts", maxAttempts,
+					"task_id", docIDStr,
+					"status", status,
+					"date_created", task["date_created"],
+					"date_done", task["date_done"])
+
+				if status == "SUCCESS" {
+					if result, ok := task["result"].(string); ok {
+						slog.Debug("Task completed successfully",
+							"result", result,
+							"related_document", task["related_document"])
+						if docID, err := strconv.Atoi(task["related_document"].(string)); err == nil {
+							slog.Debug("Found document ID in task result",
+								"id", docID,
+								"task_id", docIDStr,
+								"title", title)
+							e.Uploads.Add(1)
+							return docID, nil
+						}
+					}
+				} else if status == "FAILURE" {
+					// Check if this is a duplicate document error
+					if result, ok := task["result"].(string); ok {
+						if strings.Contains(result, "duplicate") {
+							// Extract the document ID from the error message
+							if relatedDoc, ok := task["related_document"].(string); ok {
+								if docID, err := strconv.Atoi(relatedDoc); err == nil {
+									slog.Info("Document is a duplicate, using existing document ID",
+										"task_id", docIDStr,
+										"title", title,
+										"existing_doc_id", docID)
+									e.Uploads.Add(1)
+									return docID, nil
+								}
+							}
+						}
+					}
+					failedNoteChannel <- note
+					slog.Error("document processing failed",
+						"task", task,
+						"result", task["result"])
+					return 0, fmt.Errorf("document processing failed: %v", task["result"])
+				}
+			}
+
+			if attempt < maxAttempts {
+				slog.Debug("Document still processing, waiting...",
+					"attempt", attempt,
+					"max_attempts", maxAttempts,
+					"task_id", docIDStr,
+					"delay", currentDelay)
+				time.Sleep(currentDelay)
+				// Exponential backoff with max delay
+				currentDelay = time.Duration(float64(currentDelay) * 1.5)
+				if currentDelay > maxDelay {
+					currentDelay = maxDelay
+				}
+			}
+		}
+
+		failedNoteChannel <- note
+		slog.Error("document processing timed out",
+			"task_id", docIDStr,
+			"total_time", time.Duration(maxAttempts)*initialDelay)
+		return 0, fmt.Errorf("document processing timed out after %d attempts", maxAttempts)
+	}
+
+	// If not a string, try to unmarshal as a map
+	var docDetails map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &docDetails); err != nil {
+		failedNoteChannel <- note
+		slog.Error("error decoding document details", "error", err)
+		return 0, fmt.Errorf("error decoding document details: %v", err)
+	}
+
+	if id, ok := docDetails["id"].(float64); ok {
+		slog.Debug("Found document ID in response",
+			"id", id,
+			"title", title)
+		e.Uploads.Add(1)
+		return int(id), nil
+	}
+
+	failedNoteChannel <- note
+	slog.Error("no document ID found in response",
+		"response", docDetails,
+		"title", title)
+	return 0, fmt.Errorf("no document ID found in response")
 }
 
 func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Note, outputFolder string) error {
@@ -284,6 +460,8 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 		}
 
 		e.NumNotes.Add(1)
+		var documentIDs []int
+		seenIDs := make(map[int]bool)
 
 		for _, resource := range note.Resources {
 			slog.Info("processing file",
@@ -371,7 +549,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 						"mime_type", file.MimeType)
 					fileNameWithoutExt := strings.TrimSuffix(file.Name, filepath.Ext(file.Name))
 					zipFileNameWithoutExt := strings.TrimSuffix(file.ZipFileName, filepath.Ext(file.ZipFileName))
-					err := e.uploadFileToPaperless(
+					id, err := e.uploadFileToPaperless(
 						note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt,
 						file.Name,
 						file.MimeType,
@@ -385,6 +563,17 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					// Add file to cleanup list if it's in a temporary directory
 					if extractDir == os.TempDir() {
 						filesToCleanup = append(filesToCleanup, file.Path)
+					}
+
+					// Check for duplicate IDs at the collection point
+					if !seenIDs[id] {
+						seenIDs[id] = true
+						documentIDs = append(documentIDs, id)
+					} else {
+						slog.Warn("duplicate document ID encountered during upload",
+							"document_id", id,
+							"file", file.Name,
+							"note", note.Title)
 					}
 				}
 
@@ -442,7 +631,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					break
 				}
 				e.Uploads.Add(1)
-				break
+				continue
 			}
 
 			// Create a new buffer and multipart writer for form
@@ -539,11 +728,44 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 				resource.ResourceAttributes.FileName = note.Title
 			}
 
-			err = e.uploadFileToPaperless(documentTitle, resource.ResourceAttributes.FileName, resource.Mime, decodedData, note, url, failedNoteChannel)
+			id, err := e.uploadFileToPaperless(documentTitle, resource.ResourceAttributes.FileName, resource.Mime, decodedData, note, url, failedNoteChannel)
 			if err != nil {
 				failedNoteChannel <- note
 				slog.Error("failed to upload file", "error", err)
 				break
+			}
+			slog.Debug("successfully uploaded file",
+				"file", resource.ResourceAttributes.FileName,
+				"document_id", id)
+
+			// Check for duplicate IDs at the collection point
+			if !seenIDs[id] {
+				seenIDs[id] = true
+				documentIDs = append(documentIDs, id)
+			} else {
+				slog.Warn("duplicate document ID encountered during upload",
+					"document_id", id,
+					"file", resource.ResourceAttributes.FileName,
+					"note", note.Title)
+			}
+		}
+
+		// Link documents if we have multiple documents and a link field ID
+		if len(documentIDs) > 1 && settings.LinkFieldID != 0 {
+			slog.Debug("attempting to link documents",
+				"note", note.Title,
+				"document_ids", documentIDs,
+				"link_field_id", settings.LinkFieldID)
+			if err := e.linkDocuments(note.Title, documentIDs); err != nil {
+				slog.Error("failed to link documents",
+					"error", err,
+					"note", note.Title,
+					"document_ids", documentIDs)
+			} else {
+				slog.Debug("successfully linked documents",
+					"note", note.Title,
+					"count", len(documentIDs),
+					"document_ids", documentIDs)
 			}
 		}
 	}
@@ -713,4 +935,246 @@ func getMimeType(filename string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// linkDocuments links all documents from a note together using the custom field
+func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
+	if len(documentIDs) < 2 {
+		slog.Debug("skipping document linking - less than 2 documents",
+			"count", len(documentIDs),
+			"document_ids", documentIDs)
+		return nil
+	}
+
+	settings, err := config.GetConfig()
+	if err != nil {
+		return fmt.Errorf("error getting config: %v", err)
+	}
+
+	if settings.LinkFieldID == 0 {
+		slog.Debug("skipping document linking - no link field ID specified")
+		return nil
+	}
+
+	// Ensure document IDs are unique to prevent self-linking issues
+	uniqueIDs := make([]int, 0, len(documentIDs))
+	idMap := make(map[int]bool)
+
+	for _, id := range documentIDs {
+		if !idMap[id] {
+			idMap[id] = true
+			uniqueIDs = append(uniqueIDs, id)
+		} else {
+			slog.Warn("duplicate document ID found - skipping",
+				"document_id", id,
+				"note", noteTitle)
+		}
+	}
+
+	// If we have fewer than 2 unique IDs, skip linking
+	if len(uniqueIDs) < 2 {
+		slog.Warn("skipping document linking - fewer than 2 unique documents after deduplication",
+			"original_count", len(documentIDs),
+			"unique_count", len(uniqueIDs),
+			"document_ids", documentIDs,
+			"unique_ids", uniqueIDs,
+			"note", noteTitle)
+		return nil
+	}
+
+	slog.Debug("starting document linking with unique IDs",
+		"note", noteTitle,
+		"original_count", len(documentIDs),
+		"unique_count", len(uniqueIDs),
+		"unique_ids", uniqueIDs,
+		"link_field_id", settings.LinkFieldID)
+
+	// Use unique IDs for document linking from now on
+	documentIDs = uniqueIDs
+
+	// Update each document to link to all others
+	for _, id := range documentIDs {
+		url := fmt.Sprintf("%s/api/documents/%d/", settings.PaperlessAPI, id)
+		slog.Debug("processing document for linking",
+			"document_id", id,
+			"url", url)
+
+		// Get current document data
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return fmt.Errorf("error creating GET request: %v", err)
+		}
+
+		if settings.Token != "" {
+			req.Header.Set("Authorization", "Token "+settings.Token)
+		} else {
+			req.SetBasicAuth(settings.Username, settings.Password)
+		}
+
+		slog.Debug("fetching document data", "url", req.URL.String())
+
+		resp, err := e.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("error getting document: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Read response body first
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error reading response body: %v", err)
+		}
+
+		if resp.StatusCode != 200 {
+			slog.Error("error getting document",
+				"status_code", resp.StatusCode,
+				"response_body", string(body),
+				"document_id", id)
+			return fmt.Errorf("error getting document: status code %d", resp.StatusCode)
+		}
+
+		slog.Debug("document data response", "body", string(body))
+
+		var docData map[string]interface{}
+		if err := json.Unmarshal(body, &docData); err != nil {
+			return fmt.Errorf("error decoding document data: %v", err)
+		}
+
+		slog.Debug("got document data",
+			"document_id", id,
+			"has_custom_fields", docData["custom_fields"] != nil,
+			"document_data", docData)
+
+		// Create array of linked document IDs (excluding current document)
+		var linkedIDs []int
+		for _, linkedID := range documentIDs {
+			if linkedID != id {
+				linkedIDs = append(linkedIDs, linkedID)
+			}
+		}
+
+		slog.Debug("preparing to update document",
+			"document_id", id,
+			"linked_ids", linkedIDs,
+			"total_documents", len(documentIDs))
+
+		// Initialize custom_fields if it doesn't exist
+		if _, ok := docData["custom_fields"]; !ok {
+			slog.Debug("initializing custom_fields array", "document_id", id)
+			docData["custom_fields"] = []interface{}{}
+		}
+
+		// Update custom field with links
+		customFields, ok := docData["custom_fields"].([]interface{})
+		if !ok {
+			slog.Error("custom_fields is not an array",
+				"type", fmt.Sprintf("%T", docData["custom_fields"]),
+				"value", docData["custom_fields"],
+				"document_id", id)
+			return fmt.Errorf("custom_fields is not an array")
+		}
+
+		slog.Debug("current custom fields",
+			"document_id", id,
+			"custom_fields", customFields)
+
+		// Check if the link field already exists
+		fieldExists := false
+		for _, field := range customFields {
+			if fieldMap, ok := field.(map[string]interface{}); ok {
+				slog.Debug("checking custom field",
+					"document_id", id,
+					"field", fieldMap)
+				if fieldID, ok := fieldMap["field"].(float64); ok {
+					if int(fieldID) == settings.LinkFieldID {
+						fieldMap["value"] = linkedIDs
+						fieldExists = true
+						slog.Debug("updated existing link field",
+							"document_id", id,
+							"field_id", settings.LinkFieldID,
+							"linked_ids", linkedIDs,
+							"updated_field", fieldMap)
+						break
+					}
+				}
+			}
+		}
+
+		// If the field doesn't exist, add it
+		if !fieldExists {
+			newField := map[string]interface{}{
+				"field": float64(settings.LinkFieldID),
+				"value": linkedIDs,
+			}
+			customFields = append(customFields, newField)
+			docData["custom_fields"] = customFields
+			slog.Debug("added new link field",
+				"document_id", id,
+				"field_id", settings.LinkFieldID,
+				"linked_ids", linkedIDs,
+				"new_field", newField)
+		}
+
+		// Send update request
+		jsonData, err := json.Marshal(docData)
+		if err != nil {
+			return fmt.Errorf("error marshaling document data: %v", err)
+		}
+
+		slog.Debug("sending update request",
+			"document_id", id,
+			"request_data", string(jsonData))
+
+		req, err = http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return fmt.Errorf("error creating PATCH request: %v", err)
+		}
+
+		if settings.Token != "" {
+			req.Header.Set("Authorization", "Token "+settings.Token)
+		} else {
+			req.SetBasicAuth(settings.Username, settings.Password)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err = e.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("error updating document: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			slog.Error("error updating document",
+				"status_code", resp.StatusCode,
+				"response_body", string(body),
+				"request_data", string(jsonData),
+				"document_id", id)
+			return fmt.Errorf("error updating document: status code %d", resp.StatusCode)
+		}
+
+		// Read and log the response body to verify the update
+		body, _ = io.ReadAll(resp.Body)
+		slog.Debug("update response",
+			"document_id", id,
+			"response_body", string(body))
+
+		slog.Debug("successfully updated document", "document_id", id)
+	}
+
+	slog.Info("successfully linked all documents",
+		"note", noteTitle,
+		"document_count", len(documentIDs),
+		"document_ids", documentIDs,
+		"link_field_id", settings.LinkFieldID)
+	return nil
+}
+
+// Helper function to get map keys for logging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

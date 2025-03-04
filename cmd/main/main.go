@@ -98,6 +98,14 @@ func main() {
 				os.Exit(1)
 			}
 			config.SetUnzip(unzip)
+
+			// set link field ID
+			linkFieldID, err := cmd.Flags().GetInt("link")
+			if err != nil {
+				fmt.Println("Error retrieving link flag:", err)
+				os.Exit(1)
+			}
+			config.SetLinkFieldID(linkFieldID)
 		},
 
 		// run main function
@@ -122,6 +130,9 @@ func main() {
 
 	var unzip bool
 	rootCmd.PersistentFlags().BoolVarP(&unzip, "unzip", "u", false, "Unzip .zip files found in notes")
+
+	var linkFieldID int
+	rootCmd.PersistentFlags().IntVarP(&linkFieldID, "link", "l", 0, "Custom field ID for document linking")
 
 	// run root command
 	err := rootCmd.Execute()

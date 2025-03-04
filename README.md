@@ -10,6 +10,7 @@ I've been using Evernote as a filing cabinet with mostly notes containing a sing
 
 - Go through an ENEX file, looking for notes containing allowed file types.
 - Extract those files and upload them to Paperless
+- Link documents from the same note together using a custom field
 
 It will recreate the same tags and note title as they were in Evernote.
 
@@ -26,6 +27,7 @@ Usage:
 Flags:
   -c, --concurrent int        Number of concurrent consumers (default 1)
   -h, --help                  help for enex2paperless
+  -l, --link int              Custom field ID for document linking
   -n, --nocolor               Disable colored output
   -o, --outputfolder string   Output attachements to this folder, NOT paperless.
   -u, --unzip                 Unzip .zip files found in notes
@@ -45,7 +47,7 @@ Flags:
 PaperlessAPI: http://paperboy.lan:8000
 Username: user
 Password: pass
-Token: 
+Token:
 FileTypes:
   - pdf
   - txt
@@ -56,7 +58,7 @@ FileTypes:
   - tiff
 ```
 
-To authenticate against Paperless, you can either use a token or a username/password combination. Don't configure both variations at the same time. 
+To authenticate against Paperless, you can either use a token or a username/password combination. Don't configure both variations at the same time.
 
 - Open `cmd.exe`
 - Navigate to the folder where you extracted the files, e.g.: `cd C:\Users\JohnDoe\Desktop`
@@ -124,6 +126,24 @@ enex2paperless.exe MyEnexFile.enex -u
 ```
 
 If using the Output To Folder functionality this will create a subfolder for each zip file, named after the zip file (without the .zip extension), and extract its contents there.
+
+### Document Linking
+
+You can link documents from the same note together using a custom field of type "Document Link". This is useful when you have multiple documents in a single note that are related to each other.
+
+First, create a custom field of type "Document Link" in your Paperless-ngx instance. You can find the ID of the custom field in the Paperless-ngx UI or by calling the API endpoint `/api/custom_fields/`.
+
+Then use the `-l` or `--link` flag to specify the custom field ID:
+
+```shell
+enex2paperless.exe MyEnexFile.enex -l 1
+```
+
+This will:
+1. Upload all documents from each note
+2. For each document, create links to all other documents from the same note
+3. The links will be stored in the specified custom field
+4. Works for both individual files and files extracted from zip archives
 
 ### Verbose Logging
 

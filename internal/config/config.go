@@ -29,6 +29,7 @@ type Config struct {
 	OutputFolder string
 	AdditionalTag string
 	Unzip        bool
+	LinkFieldID  int      // Custom field ID for document linking
 }
 
 // GetConfig initializes and returns the application configuration.
@@ -101,4 +102,9 @@ func SetAdditionalTag(tag string) error {
 func SetUnzip(unzip bool) error {
 	settings.Unzip = unzip
 	return nil
+}
+
+// SetLinkFieldID sets the custom field ID for document linking
+func SetLinkFieldID(id int) {
+	settings.LinkFieldID = id
 }

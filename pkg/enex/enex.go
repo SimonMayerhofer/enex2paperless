@@ -13,6 +13,7 @@ type EnexFile struct {
 	Fs                afero.Fs
 	client            *http.Client
 	NumNotes, Uploads atomic.Uint32
+	documentIDs       map[string][]int // Maps note title to list of document IDs
 }
 
 func NewEnexFile() *EnexFile {
@@ -21,6 +22,7 @@ func NewEnexFile() *EnexFile {
 		client: &http.Client{
 			Timeout: time.Second * 10,
 		},
+		documentIDs: make(map[string][]int),
 	}
 }
 
