@@ -539,7 +539,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 				resource.ResourceAttributes.FileName = note.Title
 			}
 
-			err = e.uploadFileToPaperless(note.Title, resource.ResourceAttributes.FileName, resource.Mime, decodedData, note, url, failedNoteChannel)
+			err = e.uploadFileToPaperless(documentTitle, resource.ResourceAttributes.FileName, resource.Mime, decodedData, note, url, failedNoteChannel)
 			if err != nil {
 				failedNoteChannel <- note
 				slog.Error("failed to upload file", "error", err)
