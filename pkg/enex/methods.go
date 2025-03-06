@@ -282,146 +282,29 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 
 	// Try to unmarshal as a string first (UUID)
 	if err := json.Unmarshal(bodyBytes, &docIDStr); err == nil {
-		// Successfully unmarshaled as string, convert to integer
 		slog.Debug("Response is a string",
 			"id", docIDStr,
 			"title", title,
 			"filename", fileName)
 
-		// Check the tasks endpoint to get the document ID
-		url := fmt.Sprintf("%s/api/tasks/?task_id=%s", settings.PaperlessAPI, docIDStr)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			failedNoteChannel <- note
-			slog.Error("error creating GET request", "error", err)
-			return 0, fmt.Errorf("error creating GET request: %v", err)
+		// Create task info
+		taskInfo := TaskInfo{
+			TaskID:    docIDStr,
+			Title:     title,
+			FileName:  fileName,
+			NoteTitle: note.Title,
+			Status:    "PENDING",
+			DateCreated: time.Now().Format(time.RFC3339),
 		}
 
-		if settings.Token != "" {
-			req.Header.Set("Authorization", "Token "+settings.Token)
-		} else {
-			req.SetBasicAuth(settings.Username, settings.Password)
+		// Add task to tracker
+		if err := e.taskTracker.AddTask(taskInfo); err != nil {
+			slog.Error("failed to save task info", "error", err)
+			return 0, fmt.Errorf("failed to save task info: %v", err)
 		}
 
-		slog.Debug("Fetching task details",
-			"url", req.URL.String(),
-			"task_id", docIDStr,
-			"title", title,
-			"filename", fileName)
-
-		// Try up to 10 times with a 1-second delay between attempts
-		maxAttempts := 10
-		initialDelay := time.Second
-		maxDelay := 5 * time.Second
-		currentDelay := initialDelay
-
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			resp, err := e.client.Do(req)
-			if err != nil {
-				failedNoteChannel <- note
-				slog.Error("error getting task details", "error", err)
-				return 0, fmt.Errorf("error getting task details: %v", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != 200 {
-				failedNoteChannel <- note
-				slog.Error("error getting task details", "status code", resp.StatusCode)
-				return 0, fmt.Errorf("error getting task details: status code %d", resp.StatusCode)
-			}
-
-			// Read the response body
-			bodyBytes, err = io.ReadAll(resp.Body)
-			if err != nil {
-				failedNoteChannel <- note
-				slog.Error("error reading response body", "error", err)
-				return 0, fmt.Errorf("error reading response body: %v", err)
-			}
-
-			var taskList []map[string]interface{}
-			if err := json.Unmarshal(bodyBytes, &taskList); err != nil {
-				failedNoteChannel <- note
-				slog.Error("error decoding task list", "error", err)
-				return 0, fmt.Errorf("error decoding task list: %v", err)
-			}
-
-			if len(taskList) > 0 {
-				task := taskList[0]
-				status, ok := task["status"].(string)
-				if !ok {
-					failedNoteChannel <- note
-					slog.Error("invalid task status format", "task", task)
-					return 0, fmt.Errorf("invalid task status format")
-				}
-
-				// Log task status for debugging
-				slog.Debug("Task status check",
-					"attempt", attempt,
-					"max_attempts", maxAttempts,
-					"task_id", docIDStr,
-					"status", status,
-					"date_created", task["date_created"],
-					"date_done", task["date_done"])
-
-				if status == "SUCCESS" {
-					if result, ok := task["result"].(string); ok {
-						slog.Debug("Task completed successfully",
-							"result", result,
-							"related_document", task["related_document"])
-						if docID, err := strconv.Atoi(task["related_document"].(string)); err == nil {
-							slog.Debug("Found document ID in task result",
-								"id", docID,
-								"task_id", docIDStr,
-								"title", title)
-							e.Uploads.Add(1)
-							return docID, nil
-						}
-					}
-				} else if status == "FAILURE" {
-					// Check if this is a duplicate document error
-					if result, ok := task["result"].(string); ok {
-						if strings.Contains(result, "duplicate") {
-							// Extract the document ID from the error message
-							if relatedDoc, ok := task["related_document"].(string); ok {
-								if docID, err := strconv.Atoi(relatedDoc); err == nil {
-									slog.Info("Document is a duplicate, using existing document ID",
-										"task_id", docIDStr,
-										"title", title,
-										"existing_doc_id", docID)
-									e.Uploads.Add(1)
-									return docID, nil
-								}
-							}
-						}
-					}
-					failedNoteChannel <- note
-					slog.Error("document processing failed",
-						"task", task,
-						"result", task["result"])
-					return 0, fmt.Errorf("document processing failed: %v", task["result"])
-				}
-			}
-
-			if attempt < maxAttempts {
-				slog.Debug("Document still processing, waiting...",
-					"attempt", attempt,
-					"max_attempts", maxAttempts,
-					"task_id", docIDStr,
-					"delay", currentDelay)
-				time.Sleep(currentDelay)
-				// Exponential backoff with max delay
-				currentDelay = time.Duration(float64(currentDelay) * 1.5)
-				if currentDelay > maxDelay {
-					currentDelay = maxDelay
-				}
-			}
-		}
-
-		failedNoteChannel <- note
-		slog.Error("document processing timed out",
-			"task_id", docIDStr,
-			"total_time", time.Duration(maxAttempts)*initialDelay)
-		return 0, fmt.Errorf("document processing timed out after %d attempts", maxAttempts)
+		// Return 0 as document ID since we'll get it later
+		return 0, nil
 	}
 
 	// If not a string, try to unmarshal as a map
@@ -450,6 +333,14 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Note, outputFolder string) error {
 	slog.Debug("starting UploadFromNoteChannel")
 	settings, _ := config.GetConfig()
+
+	// Initialize task tracker
+	e.taskTracker = NewTaskTracker("tasks.json")
+	e.taskTracker.Fs = e.Fs
+	if err := e.taskTracker.Load(); err != nil {
+		slog.Error("failed to load tasks", "error", err)
+		return fmt.Errorf("failed to load tasks: %v", err)
+	}
 
 	url := fmt.Sprintf("%s/api/documents/post_document/", settings.PaperlessAPI)
 
@@ -749,25 +640,18 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					"note", note.Title)
 			}
 		}
+	}
 
-		// Link documents if we have multiple documents and a link field ID
-		if len(documentIDs) > 1 && settings.LinkFieldID != 0 {
-			slog.Debug("attempting to link documents",
-				"note", note.Title,
-				"document_ids", documentIDs,
-				"link_field_id", settings.LinkFieldID)
-			if err := e.linkDocuments(note.Title, documentIDs); err != nil {
-				slog.Error("failed to link documents",
-					"error", err,
-					"note", note.Title,
-					"document_ids", documentIDs)
-			} else {
-				slog.Debug("successfully linked documents",
-					"note", note.Title,
-					"count", len(documentIDs),
-					"document_ids", documentIDs)
-			}
-		}
+	// Process all pending tasks after all uploads are complete
+	slog.Info("processing all pending tasks")
+	if err := e.ProcessPendingTasks(); err != nil {
+		slog.Error("failed to process pending tasks", "error", err)
+	}
+
+	// Link all documents after all tasks are processed
+	slog.Info("linking all documents")
+	if err := e.LinkDocuments(); err != nil {
+		slog.Error("failed to link documents", "error", err)
 	}
 
 	return nil
@@ -937,6 +821,78 @@ func getMimeType(filename string) string {
 	}
 }
 
+// LinkDocuments processes all completed tasks and links their documents
+func (e *EnexFile) LinkDocuments() error {
+	settings, _ := config.GetConfig()
+	if settings.LinkFieldID == 0 {
+		slog.Debug("skipping document linking - no link field ID specified")
+		return nil
+	}
+
+	// Group tasks by note title
+	tasksByNote := make(map[string][]TaskInfo)
+	var remainingTasks []TaskInfo
+
+	for _, task := range e.taskTracker.Tasks {
+		// Include both successful uploads and duplicate documents
+		if (task.Status == "SUCCESS" || (task.Status == "FAILURE" && task.DocumentID > 0)) && task.DocumentID > 0 {
+			tasksByNote[task.NoteTitle] = append(tasksByNote[task.NoteTitle], task)
+		} else {
+			remainingTasks = append(remainingTasks, task)
+		}
+	}
+
+	// Process each note's documents
+	for noteTitle, tasks := range tasksByNote {
+		if len(tasks) < 2 {
+			slog.Debug("skipping document linking - less than 2 documents",
+				"note", noteTitle,
+				"count", len(tasks))
+			continue
+		}
+
+		// Extract document IDs
+		var documentIDs []int
+		for _, task := range tasks {
+			documentIDs = append(documentIDs, task.DocumentID)
+		}
+
+		// Link documents
+		if err := e.linkDocuments(noteTitle, documentIDs); err != nil {
+			slog.Error("failed to link documents",
+				"error", err,
+				"note", noteTitle,
+				"document_ids", documentIDs)
+			// If linking failed, keep these tasks
+			remainingTasks = append(remainingTasks, tasks...)
+		} else {
+			slog.Debug("successfully linked documents",
+				"note", noteTitle,
+				"count", len(documentIDs),
+				"document_ids", documentIDs)
+		}
+	}
+
+	// Update the task tracker with remaining tasks
+	e.taskTracker.Tasks = remainingTasks
+
+	// If no tasks remain, delete the tasks.json file
+	if len(remainingTasks) == 0 {
+		if err := e.taskTracker.Fs.Remove(e.taskTracker.File); err != nil {
+			slog.Error("failed to delete tasks file", "error", err)
+		} else {
+			slog.Info("deleted tasks file - all tasks completed")
+		}
+	} else {
+		// Save remaining tasks
+		if err := e.taskTracker.Save(); err != nil {
+			slog.Error("failed to save remaining tasks", "error", err)
+		}
+	}
+
+	return nil
+}
+
 // linkDocuments links all documents from a note together using the custom field
 func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
 	if len(documentIDs) < 2 {
@@ -999,45 +955,80 @@ func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
 			"document_id", id,
 			"url", url)
 
-		// Get current document data
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			return fmt.Errorf("error creating GET request: %v", err)
-		}
-
-		if settings.Token != "" {
-			req.Header.Set("Authorization", "Token "+settings.Token)
-		} else {
-			req.SetBasicAuth(settings.Username, settings.Password)
-		}
-
-		slog.Debug("fetching document data", "url", req.URL.String())
-
-		resp, err := e.client.Do(req)
-		if err != nil {
-			return fmt.Errorf("error getting document: %v", err)
-		}
-		defer resp.Body.Close()
-
-		// Read response body first
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("error reading response body: %v", err)
-		}
-
-		if resp.StatusCode != 200 {
-			slog.Error("error getting document",
-				"status_code", resp.StatusCode,
-				"response_body", string(body),
-				"document_id", id)
-			return fmt.Errorf("error getting document: status code %d", resp.StatusCode)
-		}
-
-		slog.Debug("document data response", "body", string(body))
-
+		// Get current document data with retries
 		var docData map[string]interface{}
-		if err := json.Unmarshal(body, &docData); err != nil {
-			return fmt.Errorf("error decoding document data: %v", err)
+		maxRetries := 5
+		retryDelay := 2 * time.Second
+		var lastErr error
+
+		for retry := 0; retry < maxRetries; retry++ {
+			getReq, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				lastErr = fmt.Errorf("error creating GET request: %v", err)
+				continue
+			}
+
+			if settings.Token != "" {
+				getReq.Header.Set("Authorization", "Token "+settings.Token)
+			} else {
+				getReq.SetBasicAuth(settings.Username, settings.Password)
+			}
+
+			slog.Debug("fetching document data", "url", getReq.URL.String(), "retry", retry+1)
+
+			getResp, err := e.client.Do(getReq)
+			if err != nil {
+				lastErr = fmt.Errorf("error getting document: %v", err)
+				time.Sleep(retryDelay)
+				continue
+			}
+			defer getResp.Body.Close()
+
+			if getResp.StatusCode == 404 {
+				lastErr = fmt.Errorf("document not found (404)")
+				slog.Warn("document not found, skipping linking",
+					"document_id", id,
+					"note", noteTitle)
+				// Remove this document from the list of documents to link
+				documentIDs = removeInt(documentIDs, id)
+				break
+			}
+
+			if getResp.StatusCode != 200 {
+				var bodyBytes []byte
+				bodyBytes, _ = io.ReadAll(getResp.Body)
+				lastErr = fmt.Errorf("error getting document: status code %d", getResp.StatusCode)
+				slog.Error("error getting document",
+					"status_code", getResp.StatusCode,
+					"response_body", string(bodyBytes),
+					"document_id", id)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			var bodyBytes []byte
+			bodyBytes, err = io.ReadAll(getResp.Body)
+			if err != nil {
+				lastErr = fmt.Errorf("error reading response body: %v", err)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			if err := json.Unmarshal(bodyBytes, &docData); err != nil {
+				lastErr = fmt.Errorf("error decoding document data: %v", err)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			// If we get here, we successfully got the document data
+			break
+		}
+
+		if docData == nil {
+			slog.Error("failed to get document data after retries",
+				"document_id", id,
+				"error", lastErr)
+			return fmt.Errorf("failed to get document data after %d retries: %v", maxRetries, lastErr)
 		}
 
 		slog.Debug("got document data",
@@ -1125,39 +1116,41 @@ func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
 			"document_id", id,
 			"request_data", string(jsonData))
 
-		req, err = http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+		patchReq, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return fmt.Errorf("error creating PATCH request: %v", err)
 		}
 
 		if settings.Token != "" {
-			req.Header.Set("Authorization", "Token "+settings.Token)
+			patchReq.Header.Set("Authorization", "Token "+settings.Token)
 		} else {
-			req.SetBasicAuth(settings.Username, settings.Password)
+			patchReq.SetBasicAuth(settings.Username, settings.Password)
 		}
-		req.Header.Set("Content-Type", "application/json")
+		patchReq.Header.Set("Content-Type", "application/json")
 
-		resp, err = e.client.Do(req)
+		patchResp, err := e.client.Do(patchReq)
 		if err != nil {
 			return fmt.Errorf("error updating document: %v", err)
 		}
-		defer resp.Body.Close()
+		defer patchResp.Body.Close()
 
-		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
+		if patchResp.StatusCode != 200 {
+			var bodyBytes []byte
+			bodyBytes, _ = io.ReadAll(patchResp.Body)
 			slog.Error("error updating document",
-				"status_code", resp.StatusCode,
-				"response_body", string(body),
+				"status_code", patchResp.StatusCode,
+				"response_body", string(bodyBytes),
 				"request_data", string(jsonData),
 				"document_id", id)
-			return fmt.Errorf("error updating document: status code %d", resp.StatusCode)
+			return fmt.Errorf("error updating document: status code %d", patchResp.StatusCode)
 		}
 
 		// Read and log the response body to verify the update
-		body, _ = io.ReadAll(resp.Body)
+		var bodyBytes []byte
+		bodyBytes, _ = io.ReadAll(patchResp.Body)
 		slog.Debug("update response",
 			"document_id", id,
-			"response_body", string(body))
+			"response_body", string(bodyBytes))
 
 		slog.Debug("successfully updated document", "document_id", id)
 	}
@@ -1170,6 +1163,16 @@ func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
 	return nil
 }
 
+// Helper function to remove an integer from a slice
+func removeInt(slice []int, s int) []int {
+	for i, v := range slice {
+		if v == s {
+			return append(slice[:i], slice[i+1:]...)
+		}
+	}
+	return slice
+}
+
 // Helper function to get map keys for logging
 func getMapKeys(m map[string]interface{}) []string {
 	keys := make([]string, 0, len(m))
@@ -1177,4 +1180,109 @@ func getMapKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// ProcessPendingTasks checks the status of pending tasks and updates their status
+func (e *EnexFile) ProcessPendingTasks() error {
+	settings, _ := config.GetConfig()
+	pendingTasks := e.taskTracker.GetPendingTasks()
+
+	// Keep checking until all tasks are done
+	for len(pendingTasks) > 0 {
+		slog.Info("checking pending tasks", "count", len(pendingTasks))
+
+		for _, task := range pendingTasks {
+			url := fmt.Sprintf("%s/api/tasks/?task_id=%s", settings.PaperlessAPI, task.TaskID)
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				slog.Error("error creating GET request", "error", err)
+				continue
+			}
+
+			if settings.Token != "" {
+				req.Header.Set("Authorization", "Token "+settings.Token)
+			} else {
+				req.SetBasicAuth(settings.Username, settings.Password)
+			}
+
+			resp, err := e.client.Do(req)
+			if err != nil {
+				slog.Error("error getting task details", "error", err)
+				continue
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				slog.Error("error getting task details",
+					"status code", resp.StatusCode,
+					"response body", string(bodyBytes))
+				continue
+			}
+
+			bodyBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				slog.Error("error reading response body", "error", err)
+				continue
+			}
+
+			var taskList []map[string]interface{}
+			if err := json.Unmarshal(bodyBytes, &taskList); err != nil {
+				slog.Error("error decoding task list", "error", err)
+				continue
+			}
+
+			if len(taskList) > 0 {
+				taskData := taskList[0]
+				status, _ := taskData["status"].(string)
+				dateDone, _ := taskData["date_done"].(string)
+				result, _ := taskData["result"].(string)
+
+				// Update task info
+				task.Status = status
+				task.DateDone = dateDone
+
+				// Handle duplicate document case
+				if status == "FAILURE" && strings.Contains(result, "duplicate") {
+					if relatedDoc, ok := taskData["related_document"].(string); ok {
+						if docID, err := strconv.Atoi(relatedDoc); err == nil {
+							task.DocumentID = docID
+							task.Status = "SUCCESS" // Mark as success since we found the duplicate
+							slog.Info("found duplicate document",
+								"task_id", task.TaskID,
+								"original_doc_id", docID,
+								"note", task.NoteTitle)
+						}
+					}
+				} else if status == "SUCCESS" {
+					if relatedDoc, ok := taskData["related_document"].(string); ok {
+						if docID, err := strconv.Atoi(relatedDoc); err == nil {
+							task.DocumentID = docID
+						}
+					}
+				}
+
+				if err := e.taskTracker.UpdateTask(task.TaskID, task); err != nil {
+					slog.Error("failed to update task", "error", err)
+				}
+			}
+		}
+
+		// Save tasks to file after each batch of updates
+		if err := e.taskTracker.Save(); err != nil {
+			slog.Error("failed to save tasks", "error", err)
+		}
+
+		// Get updated list of pending tasks
+		pendingTasks = e.taskTracker.GetPendingTasks()
+
+		// If there are still pending tasks, wait before checking again
+		if len(pendingTasks) > 0 {
+			slog.Info("waiting for tasks to complete", "pending_count", len(pendingTasks))
+			time.Sleep(2 * time.Second) // Wait 2 seconds before checking again
+		}
+	}
+
+	slog.Info("all tasks completed")
+	return nil
 }

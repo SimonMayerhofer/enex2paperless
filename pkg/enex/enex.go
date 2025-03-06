@@ -14,6 +14,7 @@ type EnexFile struct {
 	client            *http.Client
 	NumNotes, Uploads atomic.Uint32
 	documentIDs       map[string][]int // Maps note title to list of document IDs
+	taskTracker       *TaskTracker     // Tracks document upload tasks
 }
 
 func NewEnexFile() *EnexFile {
