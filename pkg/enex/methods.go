@@ -169,7 +169,22 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 
 	// Get or create tag IDs
 	var tagIDs []int
-	for _, tagName := range note.Tags {
+
+	// Get settings for additional tags
+	settings, err := config.GetConfig()
+	if err != nil {
+		failedNoteChannel <- note
+		slog.Error("failed to get config", "error", err)
+		return fmt.Errorf("failed to get config: %v", err)
+	}
+
+	// Combine note.Tags and additional tags into one slice to process
+	allTags := append([]string{}, note.Tags...)
+	if len(settings.AdditionalTags) > 0 {
+		allTags = append(allTags, settings.AdditionalTags...)
+	}
+
+	for _, tagName := range allTags {
 		id, err := paperless.GetTagID(tagName)
 		if err != nil {
 			failedNoteChannel <- note
@@ -233,9 +248,6 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 		return fmt.Errorf("error creating new HTTP request: %v", err)
 	}
 
-	// Get settings for authentication
-	settings, _ := config.GetConfig()
-
 	// auth
 	if settings.Token != "" {
 		req.Header.Set("Authorization", "Token "+settings.Token)
@@ -273,7 +285,11 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 
 func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Note, outputFolder string) error {
 	slog.Debug("starting UploadFromNoteChannel")
-	settings, _ := config.GetConfig()
+	settings, err := config.GetConfig()
+	if err != nil {
+		slog.Error("failed to get config", "error", err)
+		return fmt.Errorf("failed to get config: %v", err)
+	}
 
 	url := fmt.Sprintf("%s/api/documents/post_document/", settings.PaperlessAPI)
 
