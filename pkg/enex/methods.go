@@ -298,20 +298,23 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 			"title", title,
 			"filename", fileName)
 
-		// Create task info
-		taskInfo := TaskInfo{
-			TaskID:    docIDStr,
-			Title:     title,
-			FileName:  fileName,
-			NoteTitle: note.Title,
-			Status:    "PENDING",
-			DateCreated: time.Now().Format(time.RFC3339),
-		}
+		// Only create task info if linking is enabled
+		if settings.LinkFieldID > 0 {
+			// Create task info
+			taskInfo := TaskInfo{
+				TaskID:    docIDStr,
+				Title:     title,
+				FileName:  fileName,
+				NoteTitle: note.Title,
+				Status:    "PENDING",
+				DateCreated: time.Now().Format(time.RFC3339),
+			}
 
-		// Add task to tracker
-		if err := e.taskTracker.AddTask(taskInfo); err != nil {
-			slog.Error("failed to save task info", "error", err)
-			return 0, fmt.Errorf("failed to save task info: %v", err)
+			// Add task to tracker
+			if err := e.taskTracker.AddTask(taskInfo); err != nil {
+				slog.Error("failed to save task info", "error", err)
+				return 0, fmt.Errorf("failed to save task info: %v", err)
+			}
 		}
 
 		// Return 0 as document ID since we'll get it later
@@ -349,12 +352,16 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 		return fmt.Errorf("failed to get config: %v", err)
 	}
 
-	// Initialize task tracker
-	e.taskTracker = NewTaskTracker("tasks.json")
-	e.taskTracker.Fs = e.Fs
-	if err := e.taskTracker.Load(); err != nil {
-		slog.Error("failed to load tasks", "error", err)
-		return fmt.Errorf("failed to load tasks: %v", err)
+	// Initialize task tracker only if linking is enabled
+	if settings.LinkFieldID > 0 {
+		e.taskTracker = NewTaskTracker("tasks.json")
+		e.taskTracker.Fs = e.Fs
+		if err := e.taskTracker.Load(); err != nil {
+			slog.Error("failed to load tasks", "error", err)
+			return fmt.Errorf("failed to load tasks: %v", err)
+		}
+	} else {
+		slog.Info("skipping task tracking - no link field ID specified")
 	}
 
 	url := fmt.Sprintf("%s/api/documents/post_document/", settings.PaperlessAPI)
@@ -641,15 +648,19 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 	}
 
 	// Process all pending tasks after all uploads are complete
-	slog.Info("processing all pending tasks")
-	if err := e.ProcessPendingTasks(); err != nil {
-		slog.Error("failed to process pending tasks", "error", err)
-	}
+	if settings.LinkFieldID > 0 {
+		slog.Info("processing all pending tasks")
+		if err := e.ProcessPendingTasks(); err != nil {
+			slog.Error("failed to process pending tasks", "error", err)
+		}
 
-	// Link all documents after all tasks are processed
-	slog.Info("linking all documents")
-	if err := e.LinkDocuments(); err != nil {
-		slog.Error("failed to link documents", "error", err)
+		// Link all documents after all tasks are processed
+		slog.Info("linking all documents")
+		if err := e.LinkDocuments(); err != nil {
+			slog.Error("failed to link documents", "error", err)
+		}
+	} else {
+		slog.Info("skipping task processing and document linking - no link field ID specified")
 	}
 
 	return nil
