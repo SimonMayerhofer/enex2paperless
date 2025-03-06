@@ -153,11 +153,10 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	var bodyBytes []byte
-	var err error
 	var docIDStr string
 
 	// Set form fields
-	err = writer.WriteField("title", title)
+	err := writer.WriteField("title", title)
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("error setting form fields", "error", err)
@@ -180,7 +179,7 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 	if err != nil {
 		failedNoteChannel <- note
 		slog.Error("failed to get config", "error", err)
-		return fmt.Errorf("failed to get config: %v", err)
+		return 0, fmt.Errorf("failed to get config: %v", err)
 	}
 
 	// Combine note.Tags and additional tags into one slice to process
