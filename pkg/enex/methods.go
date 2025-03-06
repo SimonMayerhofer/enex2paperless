@@ -174,7 +174,22 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 
 	// Get or create tag IDs
 	var tagIDs []int
-	for _, tagName := range note.Tags {
+
+	// Get settings for additional tags
+	settings, err := config.GetConfig()
+	if err != nil {
+		failedNoteChannel <- note
+		slog.Error("failed to get config", "error", err)
+		return fmt.Errorf("failed to get config: %v", err)
+	}
+
+	// Combine note.Tags and additional tags into one slice to process
+	allTags := append([]string{}, note.Tags...)
+	if len(settings.AdditionalTags) > 0 {
+		allTags = append(allTags, settings.AdditionalTags...)
+	}
+
+	for _, tagName := range allTags {
 		id, err := paperless.GetTagID(tagName)
 		if err != nil {
 			failedNoteChannel <- note
@@ -237,9 +252,6 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 		slog.Error("error creating new HTTP request", "error", err)
 		return 0, fmt.Errorf("error creating new HTTP request: %v", err)
 	}
-
-	// Get settings for authentication
-	settings, _ := config.GetConfig()
 
 	// auth
 	if settings.Token != "" {
@@ -332,7 +344,11 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 
 func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Note, outputFolder string) error {
 	slog.Debug("starting UploadFromNoteChannel")
-	settings, _ := config.GetConfig()
+	settings, err := config.GetConfig()
+	if err != nil {
+		slog.Error("failed to get config", "error", err)
+		return fmt.Errorf("failed to get config: %v", err)
+	}
 
 	// Initialize task tracker
 	e.taskTracker = NewTaskTracker("tasks.json")
@@ -557,7 +573,14 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 
 			// Get or create tag IDs
 			var tagIDs []int
-			for _, tagName := range note.Tags {
+
+			// Combine note.Tags and additional tags into one slice to process
+			allTags := append([]string{}, note.Tags...)
+			if len(settings.AdditionalTags) > 0 {
+				allTags = append(allTags, settings.AdditionalTags...)
+			}
+
+			for _, tagName := range allTags {
 				id, err := paperless.GetTagID(tagName)
 				if err != nil {
 					failedNoteChannel <- note
@@ -575,30 +598,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					}
 				} else {
 					slog.Debug(fmt.Sprintf("found tag: %s with ID: %v", tagName, id))
-				}
-
-				tagIDs = append(tagIDs, id)
-			}
-
-			// Add additional tag if configured
-			if settings.AdditionalTag != "" {
-				id, err := paperless.GetTagID(settings.AdditionalTag)
-				if err != nil {
-					failedNoteChannel <- note
-					slog.Error("failed to check for additional tag", "error", err)
-					break
-				}
-
-				if id == 0 {
-					slog.Debug("creating additional tag", "tag", settings.AdditionalTag)
-					id, err = paperless.CreateTag(settings.AdditionalTag)
-					if err != nil {
-						failedNoteChannel <- note
-						slog.Error("couldn't create additional tag", "error", err.Error())
-						break
-					}
-				} else {
-					slog.Debug(fmt.Sprintf("found additional tag: %s with ID: %v", settings.AdditionalTag, id))
 				}
 
 				tagIDs = append(tagIDs, id)
