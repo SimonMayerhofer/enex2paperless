@@ -1040,11 +1040,6 @@ func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
 			return fmt.Errorf("failed to get document data after %d retries: %v", maxRetries, lastErr)
 		}
 
-		slog.Debug("got document data",
-			"document_id", id,
-			"has_custom_fields", docData["custom_fields"] != nil,
-			"document_data", docData)
-
 		// Create array of linked document IDs (excluding current document)
 		var linkedIDs []int
 		for _, linkedID := range documentIDs {
@@ -1121,10 +1116,6 @@ func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
 			return fmt.Errorf("error marshaling document data: %v", err)
 		}
 
-		slog.Debug("sending update request",
-			"document_id", id,
-			"request_data", string(jsonData))
-
 		patchReq, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return fmt.Errorf("error creating PATCH request: %v", err)
@@ -1153,13 +1144,6 @@ func (e *EnexFile) linkDocuments(noteTitle string, documentIDs []int) error {
 				"document_id", id)
 			return fmt.Errorf("error updating document: status code %d", patchResp.StatusCode)
 		}
-
-		// Read and log the response body to verify the update
-		var bodyBytes []byte
-		bodyBytes, _ = io.ReadAll(patchResp.Body)
-		slog.Debug("update response",
-			"document_id", id,
-			"response_body", string(bodyBytes))
 
 		slog.Debug("successfully updated document", "document_id", id)
 	}
