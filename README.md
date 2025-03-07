@@ -30,8 +30,9 @@ Flags:
   -l, --link int              Custom field ID for document linking
   -n, --nocolor               Disable colored output
   -o, --outputfolder string   Output attachements to this folder, NOT paperless.
+  -t, string                  Additional tags to add to all files.
+  -T,                         ENEX Filename without extension added as a tag
   -u, --unzip                 Unzip .zip files found in notes
-  -t, --tag string            Additional tag to add to all files. .enex filename is used if string is empty.
   -v, --verbose               Enable verbose logging
 ```
 
@@ -115,7 +116,7 @@ If you set the `-T` flag, the ENEX filename (without extension) will be used as 
 enex2paperless.exe MyEnexFile.enex -T
 ```
 
-This will add "MyEnexFile" as a tag to all processed files. 
+This will add "MyEnexFile" as a tag to all processed files.
 
 If you use neither the `-t` or `-T` flags, no additional tags will be added, and only the original Evernote tags will be preserved.
 
