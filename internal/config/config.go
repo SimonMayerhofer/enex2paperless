@@ -30,6 +30,7 @@ type Config struct {
 	AdditionalTags []string
 	Unzip          bool
 	LinkFieldID    int      // Custom field ID for document linking
+	TitlePrefix    bool     // Whether to prefix filenames with note titles
 }
 
 // GetConfig initializes and returns the application configuration.
@@ -107,4 +108,9 @@ func SetUnzip(unzip bool) error {
 // SetLinkFieldID sets the custom field ID for document linking
 func SetLinkFieldID(id int) {
 	settings.LinkFieldID = id
+}
+
+// SetTitlePrefix sets whether to prefix filenames with note titles
+func SetTitlePrefix(prefix bool) {
+	settings.TitlePrefix = prefix
 }

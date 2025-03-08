@@ -30,6 +30,7 @@ Flags:
   -l, --link int              Custom field ID for document linking
   -n, --nocolor               Disable colored output
   -o, --outputfolder string   Output attachements to this folder, NOT paperless.
+      --titleprefix           Prefix filenames with note titles when using outputfolder.
   -t, string                  Additional tags to add to all files.
   -T,                         ENEX Filename without extension added as a tag
   -u, --unzip                 Unzip .zip files found in notes
@@ -101,6 +102,14 @@ enex2paperless.exe MyEnexFile.enex -o myfoldername
 ```
 
 This disables uploads to Paperless and only outputs files to your provided folder.
+
+You can also prefix filenames with their note titles using the `--titleprefix` flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex -o myfoldername --titleprefix
+```
+
+This will save files as "Note Title - Filename.ext". If the note title and filename (without extension) are identical, the prefix will be skipped to avoid duplication.
 
 ### Additional Tags / Filename As Tag
 

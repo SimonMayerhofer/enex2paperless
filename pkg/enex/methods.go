@@ -582,6 +582,24 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 				filename = ensureCorrectExtension(filename, resource.Mime)
 				slog.Debug("filename after extension check", "filename", filename, "mime_type", resource.Mime)
 
+				// Add title prefix if enabled and titles don't match
+				if settings.TitlePrefix {
+					// Get the filename without extension for comparison
+					ext := filepath.Ext(filename)
+					filenameWithoutExt := strings.TrimSuffix(filename, ext)
+					noteTitle := sanitizeFilename(note.Title)
+
+					// Only add prefix if the title and filename are different
+					if !strings.EqualFold(noteTitle, filenameWithoutExt) {
+						filename = noteTitle + " - " + filename
+						slog.Debug("added title prefix to filename", "filename", filename)
+					} else {
+						slog.Debug("skipping title prefix - title matches filename",
+							"title", noteTitle,
+							"filename", filenameWithoutExt)
+					}
+				}
+
 				// Check if file exists and generate a new name with suffix if it does
 				fileName := filepath.Join(outputFolder, filename)
 				baseFileName := filename

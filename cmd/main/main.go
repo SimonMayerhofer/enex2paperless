@@ -113,6 +113,14 @@ func main() {
 				os.Exit(1)
 			}
 			config.SetLinkFieldID(linkFieldID)
+
+			// set title prefix option
+			titlePrefix, err := cmd.Flags().GetBool("titleprefix")
+			if err != nil {
+				fmt.Println("Error retrieving titleprefix flag:", err)
+				os.Exit(1)
+			}
+			config.SetTitlePrefix(titlePrefix)
 		},
 
 		// run main function
@@ -142,6 +150,9 @@ func main() {
 
 	var linkFieldID int
 	rootCmd.PersistentFlags().IntVarP(&linkFieldID, "link", "l", 0, "Custom field ID for document linking")
+
+	var titlePrefix bool
+	rootCmd.PersistentFlags().BoolVar(&titlePrefix, "titleprefix", false, "Prefix filenames with note titles when using outputfolder")
 
 	// run root command
 	err := rootCmd.Execute()
