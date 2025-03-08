@@ -139,13 +139,61 @@ func checkFileType(mimeType string) (bool, error) {
 	return false, nil
 }
 
-// Extract the file extension from the MIME type (assuming valid format)
+// Extract the file extension from the MIME type
 func getExtensionFromMimeType(mimeType string) (string, error) {
+	mimeToExt := map[string]string{
+		// Microsoft Office - Modern formats
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":    "docx",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         "xlsx",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+
+		// Microsoft Office - Legacy formats
+		"application/msword": "doc",
+		"application/vnd.ms-excel": "xls",
+		"application/vnd.ms-powerpoint": "ppt",
+
+		// Apple iWork formats
+		"application/x-iwork-keynote-sffnumbers": "numbers",
+		"application/x-iwork-pages-sffpages": "pages",
+		"application/x-iwork-keynote-sffkey": "key",
+
+		// Document formats
+		"application/pdf": "pdf",
+		"application/rtf": "rtf",
+
+		// Image formats
+		"image/jpeg": "jpg",
+		"image/png": "png",
+		"image/gif": "gif",
+		"image/webp": "webp",
+		"image/tiff": "tiff",
+
+		// Text formats
+		"text/plain": "txt",
+		"text/html": "html",
+		"text/csv": "csv",
+		"application/xml": "xml",
+		"application/json": "json",
+
+		// Archive formats
+		"application/zip": "zip",
+		"application/x-rar-compressed": "rar",
+		"application/x-7z-compressed": "7z",
+	}
+
+	// Check if we have a direct mapping
+	if ext, ok := mimeToExt[mimeType]; ok {
+		return ext, nil
+	}
+
+	// If no direct mapping, split and use the subtype
 	parts := strings.Split(mimeType, "/")
 	if len(parts) != 2 {
 		return "", fmt.Errorf("invalid MIME type format: %s", mimeType)
 	}
-	return parts[1], nil
+
+	// For unknown types, return empty string to indicate no known mapping
+	return "", nil
 }
 
 // calculateChecksum calculates SHA-256 hash of data
@@ -526,17 +574,13 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 				// Use note title if filename is empty
 				filename := resource.ResourceAttributes.FileName
 				if filename == "" {
-					// If MIME type exists, append appropriate extension
-					ext := ""
-					if resource.Mime != "" {
-						mimeExt, err := getExtensionFromMimeType(resource.Mime)
-						if err == nil {
-							ext = "." + mimeExt
-						}
-					}
-					filename = sanitizeFilename(note.Title) + ext
+					filename = sanitizeFilename(note.Title)
 					slog.Info("using note title as filename", "title", note.Title, "filename", filename)
 				}
+
+				// Ensure filename has correct extension based on MIME type
+				filename = ensureCorrectExtension(filename, resource.Mime)
+				slog.Debug("filename after extension check", "filename", filename, "mime_type", resource.Mime)
 
 				// Check if file exists and generate a new name with suffix if it does
 				fileName := filepath.Join(outputFolder, filename)
@@ -1344,4 +1388,59 @@ func sanitizeFilename(filename string) string {
 	}
 
 	return filename
+}
+
+// ensureCorrectExtension makes sure the filename has the correct extension based on MIME type
+func ensureCorrectExtension(filename string, mimeType string) string {
+	if mimeType == "" {
+		// Even if no MIME type, ensure existing extension is lowercase
+		ext := filepath.Ext(filename)
+		if ext != "" {
+			basename := strings.TrimSuffix(filename, ext)
+			return basename + strings.ToLower(ext)
+		}
+		return filename
+	}
+
+	expectedExt, err := getExtensionFromMimeType(mimeType)
+	if err != nil || expectedExt == "" {
+		// If error getting MIME extension or no known mapping,
+		// preserve the existing extension but ensure it's lowercase
+		ext := filepath.Ext(filename)
+		if ext != "" {
+			basename := strings.TrimSuffix(filename, ext)
+			return basename + strings.ToLower(ext)
+		}
+		return filename
+	}
+
+	// Normalize extensions
+	expectedExt = strings.ToLower(expectedExt)
+	switch expectedExt {
+	case "jpeg":
+		expectedExt = "jpg"
+	case "plain":
+		expectedExt = "txt"
+	}
+
+	// Get current extension
+	currentExt := strings.ToLower(filepath.Ext(filename))
+	if currentExt == "" {
+		// No extension, add the expected one
+		return filename + "." + expectedExt
+	}
+
+	// Remove the dot from current extension
+	currentExt = strings.TrimPrefix(currentExt, ".")
+
+	// If extensions don't match and we have a known mapping, replace with correct one
+	if currentExt != expectedExt {
+		// Remove current extension and add the correct one
+		basename := strings.TrimSuffix(filename, filepath.Ext(filename))
+		return basename + "." + expectedExt
+	}
+
+	// Extensions match or we're keeping the existing one, but ensure it's lowercase
+	basename := strings.TrimSuffix(filename, filepath.Ext(filename))
+	return basename + "." + currentExt
 }
