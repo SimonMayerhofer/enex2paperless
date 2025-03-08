@@ -648,11 +648,54 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					continue
 				}
 
+				// Write the file first
 				if err := afero.WriteFile(e.Fs, fileName, decodedData, 0644); err != nil {
 					failedNoteChannel <- note
 					slog.Error(fmt.Sprintf("failed to write file %v", err))
 					break
 				}
+
+				// Try to get the resource's timestamp first, fall back to note's creation time
+				var fileTime time.Time
+				var err error
+
+				if resource.ResourceAttributes.Timestamp != "" {
+					fileTime, err = time.Parse("20060102T150405Z", resource.ResourceAttributes.Timestamp)
+					if err != nil {
+						slog.Debug("failed to parse resource timestamp, using note creation time",
+							"error", err,
+							"resource_timestamp", resource.ResourceAttributes.Timestamp)
+						fileTime, err = time.Parse("20060102T150405Z", note.Created)
+						if err != nil {
+							slog.Error("failed to parse note creation time", "error", err)
+						}
+					} else {
+						slog.Debug("using resource timestamp",
+							"file", fileName,
+							"time", fileTime)
+					}
+				} else {
+					fileTime, err = time.Parse("20060102T150405Z", note.Created)
+					if err != nil {
+						slog.Error("failed to parse note creation time", "error", err)
+					} else {
+						slog.Debug("using note creation time (no resource timestamp)",
+							"file", fileName,
+							"time", fileTime)
+					}
+				}
+
+				// Try to set both modification and access times if we have a valid timestamp
+				if !fileTime.IsZero() {
+					if _, ok := e.Fs.(*afero.OsFs); ok {
+						if err := os.Chtimes(fileName, fileTime, fileTime); err != nil {
+							slog.Error("failed to set file timestamps", "error", err)
+						} else {
+							slog.Debug("set file timestamps", "file", fileName, "time", fileTime)
+						}
+					}
+				}
+
 				slog.Info("saved file", "path", fileName)
 				e.Uploads.Add(1)
 				continue
