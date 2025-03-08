@@ -2,7 +2,6 @@ package enex
 
 import (
 	"archive/zip"
-	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -515,27 +514,26 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					break
 				}
 
+				// Check if file exists and generate a new name with suffix if it does
 				fileName := filepath.Join(outputFolder, resource.ResourceAttributes.FileName)
-
-				exists, err := afero.Exists(e.Fs, fileName)
-				if err != nil {
-					failedNoteChannel <- note
-					slog.Error(fmt.Sprintf("failed to check if file exists: %v", err))
-					break
-				} else if exists {
-					slog.Warn(fmt.Sprintf("file already exists: %s", fileName))
-					// Prompt user for overwrite confirmation
-					reader := bufio.NewReader(os.Stdin)
-					fmt.Printf("File %s already exists. Do you want to overwrite it? (y/N): ", fileName)
-					response, _ := reader.ReadString('\n')
-					response = strings.TrimSpace(response)
-
-					// Handle the response
-					if strings.ToLower(response) != "y" {
-						slog.Warn(fmt.Sprintf("skipping file: %v", fileName))
+				baseFileName := resource.ResourceAttributes.FileName
+				counter := 1
+				for {
+					exists, err := afero.Exists(e.Fs, fileName)
+					if err != nil {
 						failedNoteChannel <- note
+						slog.Error(fmt.Sprintf("failed to check if file exists: %v", err))
 						break
 					}
+					if !exists {
+						break
+					}
+					// Split the base filename into name and extension
+					ext := filepath.Ext(baseFileName)
+					nameWithoutExt := strings.TrimSuffix(baseFileName, ext)
+					// Add counter to filename
+					fileName = filepath.Join(outputFolder, fmt.Sprintf("%s-%d%s", nameWithoutExt, counter, ext))
+					counter++
 				}
 
 				if err := afero.WriteFile(e.Fs, fileName, decodedData, 0644); err != nil {
@@ -543,6 +541,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					slog.Error(fmt.Sprintf("failed to write file %v", err))
 					break
 				}
+				slog.Info("saved file", "path", fileName)
 				e.Uploads.Add(1)
 				continue
 			}
