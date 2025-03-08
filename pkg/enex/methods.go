@@ -523,9 +523,24 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					break
 				}
 
+				// Use note title if filename is empty
+				filename := resource.ResourceAttributes.FileName
+				if filename == "" {
+					// If MIME type exists, append appropriate extension
+					ext := ""
+					if resource.Mime != "" {
+						mimeExt, err := getExtensionFromMimeType(resource.Mime)
+						if err == nil {
+							ext = "." + mimeExt
+						}
+					}
+					filename = sanitizeFilename(note.Title) + ext
+					slog.Info("using note title as filename", "title", note.Title, "filename", filename)
+				}
+
 				// Check if file exists and generate a new name with suffix if it does
-				fileName := filepath.Join(outputFolder, resource.ResourceAttributes.FileName)
-				baseFileName := resource.ResourceAttributes.FileName
+				fileName := filepath.Join(outputFolder, filename)
+				baseFileName := filename
 				counter := 1
 				foundIdentical := false
 
@@ -1312,4 +1327,21 @@ func (e *EnexFile) ProcessPendingTasks() error {
 
 	slog.Info("all tasks completed")
 	return nil
+}
+
+// sanitizeFilename removes or replaces characters that are invalid in filenames
+func sanitizeFilename(filename string) string {
+	// Replace invalid characters with underscores
+	invalidChars := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
+	filename = invalidChars.ReplaceAllString(filename, "_")
+
+	// Remove leading/trailing spaces and dots
+	filename = strings.Trim(filename, " .")
+
+	// If filename is empty after sanitization, return a default name
+	if filename == "" {
+		return "untitled"
+	}
+
+	return filename
 }
