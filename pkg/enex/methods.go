@@ -3,7 +3,9 @@ package enex
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"enex2paperless/internal/config"
@@ -144,6 +146,13 @@ func getExtensionFromMimeType(mimeType string) (string, error) {
 		return "", fmt.Errorf("invalid MIME type format: %s", mimeType)
 	}
 	return parts[1], nil
+}
+
+// calculateChecksum calculates SHA-256 hash of data
+func calculateChecksum(data []byte) string {
+	hash := sha256.New()
+	hash.Write(data)
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 // uploadFileToPaperless handles the common upload logic for both regular and extracted files
@@ -518,6 +527,11 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 				fileName := filepath.Join(outputFolder, resource.ResourceAttributes.FileName)
 				baseFileName := resource.ResourceAttributes.FileName
 				counter := 1
+				foundIdentical := false
+
+				// Calculate checksum of the current file
+				currentChecksum := calculateChecksum(decodedData)
+
 				for {
 					exists, err := afero.Exists(e.Fs, fileName)
 					if err != nil {
@@ -528,12 +542,33 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel, failedNoteChannel chan Not
 					if !exists {
 						break
 					}
-					// Split the base filename into name and extension
+
+					// Read existing file and compare checksums
+					existingData, err := afero.ReadFile(e.Fs, fileName)
+					if err != nil {
+						failedNoteChannel <- note
+						slog.Error(fmt.Sprintf("failed to read existing file: %v", err))
+						break
+					}
+
+					existingChecksum := calculateChecksum(existingData)
+					if existingChecksum == currentChecksum {
+						slog.Info("skipping identical file", "path", fileName)
+						e.Uploads.Add(1)
+						foundIdentical = true
+						break
+					}
+
+					// Files are different, try next suffix
 					ext := filepath.Ext(baseFileName)
 					nameWithoutExt := strings.TrimSuffix(baseFileName, ext)
-					// Add counter to filename
 					fileName = filepath.Join(outputFolder, fmt.Sprintf("%s-%d%s", nameWithoutExt, counter, ext))
 					counter++
+				}
+
+				// Skip writing if we found an identical file
+				if foundIdentical {
+					continue
 				}
 
 				if err := afero.WriteFile(e.Fs, fileName, decodedData, 0644); err != nil {
