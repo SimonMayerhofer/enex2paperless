@@ -121,6 +121,14 @@ func main() {
 				os.Exit(1)
 			}
 			config.SetTitlePrefix(titlePrefix)
+
+			// set markdown conversion option
+			convertMarkdown, err := cmd.Flags().GetBool("convert-markdown")
+			if err != nil {
+				fmt.Println("Error retrieving convert-markdown flag:", err)
+				os.Exit(1)
+			}
+			config.SetConvertMarkdown(convertMarkdown)
 		},
 
 		// run main function
@@ -153,6 +161,9 @@ func main() {
 
 	var titlePrefix bool
 	rootCmd.PersistentFlags().BoolVar(&titlePrefix, "titleprefix", false, "Prefix filenames with note titles when using outputfolder")
+
+	var convertMarkdown bool
+	rootCmd.PersistentFlags().BoolVarP(&convertMarkdown, "convert-markdown", "m", false, "Convert note content to markdown")
 
 	// run root command
 	err := rootCmd.Execute()

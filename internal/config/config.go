@@ -21,16 +21,17 @@ var (
 )
 
 type Config struct {
-	PaperlessAPI   string   `validate:"required,http_url"`
-	Username       string   `validate:"required_with=Password"`
-	Password       string   `validate:"required_with=Username"`
-	Token          string   `validate:"required_without=Password"`
-	FileTypes      []string `validate:"required"`
-	OutputFolder   string
-	AdditionalTags []string
-	Unzip          bool
-	LinkFieldID    int      // Custom field ID for document linking
-	TitlePrefix    bool     // Whether to prefix filenames with note titles
+	PaperlessAPI    string   `validate:"required,http_url"`
+	Username        string   `validate:"required_with=Password"`
+	Password        string   `validate:"required_with=Username"`
+	Token           string   `validate:"required_without=Password"`
+	FileTypes       []string `validate:"required"`
+	OutputFolder    string
+	AdditionalTags  []string
+	Unzip           bool
+	LinkFieldID     int      // Custom field ID for document linking
+	TitlePrefix     bool     // Whether to prefix filenames with note titles
+	ConvertMarkdown bool    // Whether to convert note content to markdown
 }
 
 // GetConfig initializes and returns the application configuration.
@@ -113,4 +114,9 @@ func SetLinkFieldID(id int) {
 // SetTitlePrefix sets whether to prefix filenames with note titles
 func SetTitlePrefix(prefix bool) {
 	settings.TitlePrefix = prefix
+}
+
+// SetConvertMarkdown sets whether to convert note content to markdown
+func SetConvertMarkdown(convert bool) {
+	settings.ConvertMarkdown = convert
 }

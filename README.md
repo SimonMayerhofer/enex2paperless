@@ -11,6 +11,7 @@ I've been using Evernote as a filing cabinet with mostly notes containing a sing
 - Go through an ENEX file, looking for notes containing allowed file types.
 - Extract those files and upload them to Paperless
 - Link documents from the same note together using a custom field
+- Convert note content to Markdown format (optional)
 
 It will recreate the same tags and note title as they were in Evernote.
 
@@ -28,6 +29,7 @@ Flags:
   -c, --concurrent int        Number of concurrent consumers (default 1)
   -h, --help                  help for enex2paperless
   -l, --link int              Custom field ID for document linking
+  -m, --convert-markdown      Convert note content to markdown format
   -n, --nocolor               Disable colored output
   -o, --outputfolder string   Output attachements to this folder, NOT paperless.
       --titleprefix           Prefix filenames with note titles when using outputfolder.
@@ -156,6 +158,16 @@ This will:
 2. For each document, create links to all other documents from the same note
 3. The links will be stored in the specified custom field
 4. Works for both individual files and files extracted from zip archives
+
+### Markdown Conversion
+
+You can convert the content of your Evernote notes to Markdown format using the `-m` or `--convert-markdown` flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex -m
+```
+
+Files will be tagged with "markdown" for easy identification. Only notes with text in the content will be uploaded as markdown files.
 
 ### Verbose Logging
 
