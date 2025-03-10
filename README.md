@@ -12,6 +12,7 @@ I've been using Evernote as a filing cabinet with mostly notes containing a sing
 - Extract those files and upload them to Paperless
 - Link documents from the same note together using a custom field
 - Convert note content to Markdown format (optional)
+- Convert Apple iWork files (Pages, Numbers, Keynote) to PDF format (optional, macOS only)
 
 It will recreate the same tags and note title as they were in Evernote.
 
@@ -60,6 +61,7 @@ FileTypes:
   - webp
   - gif
   - tiff
+ConvertAppleToPDF: false
 ```
 
 To authenticate against Paperless, you can either use a token or a username/password combination. Don't configure both variations at the same time.
@@ -168,6 +170,24 @@ enex2paperless.exe MyEnexFile.enex -m
 ```
 
 Files will be tagged with "markdown" for easy identification. Only notes with text in the content will be uploaded as markdown files.
+
+### Apple iWork Files Conversion
+
+You can automatically convert Apple iWork files (Pages, Numbers, and Keynote) to PDF format before uploading them to Paperless. This feature is only available on macOS and requires the corresponding Apple applications to be installed:
+
+- Pages for .pages files
+- Numbers for .numbers files
+- Keynote for .key files
+
+To enable this feature, add the following to your `config.yaml`:
+
+```yaml
+ConvertAppleToPDF: true
+```
+
+This feature is particularly useful for Evernote users who have stored Apple iWork documents in their notes, as Paperless doesn't natively support these formats.
+
+If `ConvertAppleToPDF` is not enabled, Apple iWork files will be skipped during processing to avoid upload errors.
 
 ### Verbose Logging
 

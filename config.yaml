@@ -10,3 +10,5 @@ FileTypes:
   - webp
   - gif
   - tiff
+# Whether to convert Apple (pages, numbers, keynote) files to PDF before uploading
+ConvertAppleToPDF: true
