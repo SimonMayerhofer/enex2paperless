@@ -28,14 +28,15 @@ Usage:
 
 Flags:
   -c, --concurrent int        Number of concurrent consumers (default 1)
+      --convert-apple-pdf     Convert Apple Pages and Numbers files to PDF
+  -m, --convert-markdown      Convert note content to markdown format
   -h, --help                  help for enex2paperless
   -l, --link int              Custom field ID for document linking
-  -m, --convert-markdown      Convert note content to markdown format
   -n, --nocolor               Disable colored output
   -o, --outputfolder string   Output attachements to this folder, NOT paperless.
-      --titleprefix           Prefix filenames with note titles when using outputfolder.
-  -t, string                  Additional tags to add to all files.
-  -T,                         ENEX Filename without extension added as a tag
+  -t, --tags strings          Additional tags to add to all documents
+  -T, --use-filename-tag      Add the ENEX filename as tag to all documents
+      --titleprefix           Prefix filenames with note titles when using outputfolder
   -u, --unzip                 Unzip .zip files found in notes
   -v, --verbose               Enable verbose logging
 ```
@@ -61,10 +62,66 @@ FileTypes:
   - webp
   - gif
   - tiff
-ConvertAppleToPDF: false
+# Optional settings
+OutputFolder: ""           # Output to folder instead of Paperless
+AdditionalTags: []         # Additional tags to add to all documents
+Unzip: false               # Whether to unzip .zip files found in notes
+LinkFieldID: 0             # Custom field ID for document linking
+TitlePrefix: false         # Whether to prefix filenames with note titles
+ConvertMarkdown: false     # Whether to convert note content to markdown
+ConvertAppleToPDF: false   # Whether to convert Apple Pages and Numbers files to PDF
+ConcurrentWorkers: 1       # Number of concurrent workers
+UseFilenameAsTag: false    # Whether to use the ENEX filename as a tag
 ```
 
 To authenticate against Paperless, you can either use a token or a username/password combination. Don't configure both variations at the same time.
+
+### Configuration Options
+
+All settings can be configured either in the `config.yaml` file or via command-line arguments. If a setting is specified both in the config file and as a command-line argument, the command-line argument takes precedence.
+
+#### Config File
+
+The `config.yaml` file supports the following settings:
+
+```yaml
+# Required settings
+PaperlessAPI: http://paperboy.lan:8000   # URL of your Paperless instance
+Username: user                           # Username for Paperless (use with Password)
+Password: pass                           # Password for Paperless (use with Username)
+Token:                                   # API token for Paperless (alternative to Username/Password)
+FileTypes:                               # List of file types to process
+  - pdf
+  - txt
+  - jpg
+
+# Optional settings
+OutputFolder: ""                         # Output to folder instead of Paperless
+AdditionalTags: []                       # Additional tags to add to all documents
+Unzip: false                             # Whether to unzip .zip files found in notes
+LinkFieldID: 0                           # Custom field ID for document linking
+TitlePrefix: false                       # Whether to prefix filenames with note titles
+ConvertMarkdown: false                   # Whether to convert note content to markdown
+ConvertAppleToPDF: false                 # Whether to convert Apple iWork files to PDF
+ConcurrentWorkers: 1                     # Number of concurrent workers
+UseFilenameAsTag: false                 # Whether to use the ENEX filename as a tag
+```
+
+#### Command-line Arguments
+
+The following table shows the mapping between config.yaml settings and command-line arguments:
+
+| config.yaml setting | Command-line argument  | Description |
+|---------------------|------------------------|-------------|
+| OutputFolder        | -o, --outputfolder     | Output attachements to this folder, NOT paperless |
+| AdditionalTags      | -t, --tags             | Additional tags to add to all documents |
+| UseFilenameAsTag    | -T, --use-filename-tag | Add the ENEX filename as tag to all documents |
+| Unzip               | -u, --unzip            | Unzip .zip files found in notes |
+| LinkFieldID         | -l, --link             | Custom field ID for document linking |
+| TitlePrefix         | --titleprefix          | Prefix filenames with note titles |
+| ConvertMarkdown     | -m, --convert-markdown | Convert note content to markdown |
+| ConvertAppleToPDF   | --convert-apple-pdf    | Convert Apple iWork files to PDF |
+| ConcurrentWorkers   | -c, --concurrent       | Number of concurrent workers |
 
 - Open `cmd.exe`
 - Navigate to the folder where you extracted the files, e.g.: `cd C:\Users\JohnDoe\Desktop`
@@ -95,6 +152,12 @@ The tool is capable of handling multiple uploads concurrently. By default it wil
 enex2paperless.exe MyEnexFile.enex -c 3
 ```
 
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+ConcurrentWorkers: 3
+```
+
 > **Attention:** Depending on your Paperless installation, it might not be able to handle multiple requests at the same time efficiently. In that case, using multiple concurrent uploads would only slow down the process instead of speeding it up.
 
 ### Output To Folder
@@ -105,12 +168,25 @@ Optionally it is possible to output all attachements to a specific folder, as op
 enex2paperless.exe MyEnexFile.enex -o myfoldername
 ```
 
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+OutputFolder: "myfoldername"
+```
+
 This disables uploads to Paperless and only outputs files to your provided folder.
 
 You can also prefix filenames with their note titles using the `--titleprefix` flag:
 
 ```shell
 enex2paperless.exe MyEnexFile.enex -o myfoldername --titleprefix
+```
+
+Or in your `config.yaml` file:
+
+```yaml
+OutputFolder: "myfoldername"
+TitlePrefix: true
 ```
 
 This will save files as "Note Title - Filename.ext". If the note title and filename (without extension) are identical, the prefix will be skipped to avoid duplication.
@@ -123,10 +199,25 @@ You can add additional tags to all files being processed using the `-t` flag and
 enex2paperless.exe MyEnexFile.enex -t migration2024,taxes,important
 ```
 
-If you set the `-T` flag, the ENEX filename (without extension) will be used as an additional tag:
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+AdditionalTags:
+  - migration2024
+  - taxes
+  - important
+```
+
+If you set the `-T` or `--use-filename-tag` flag, the ENEX filename (without extension) will be used as an additional tag:
 
 ```shell
 enex2paperless.exe MyEnexFile.enex -T
+```
+
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+UseFilenameAsTag: true
 ```
 
 This will add "MyEnexFile" as a tag to all processed files.
@@ -139,6 +230,12 @@ You can automatically extract any zip files found in the notes using the `-u` or
 
 ```shell
 enex2paperless.exe MyEnexFile.enex -u
+```
+
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+Unzip: true
 ```
 
 If using the Output To Folder functionality this will create a subfolder for each zip file, named after the zip file (without the .zip extension), and extract its contents there.
@@ -155,6 +252,12 @@ Then use the `-l` or `--link` flag to specify the custom field ID:
 enex2paperless.exe MyEnexFile.enex -l 1
 ```
 
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+LinkFieldID: 1
+```
+
 This will:
 1. Upload all documents from each note
 2. For each document, create links to all other documents from the same note
@@ -167,6 +270,12 @@ You can convert the content of your Evernote notes to Markdown format using the 
 
 ```shell
 enex2paperless.exe MyEnexFile.enex -m
+```
+
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+ConvertMarkdown: true
 ```
 
 Files will be tagged with "markdown" for easy identification. Only notes with text in the content will be uploaded as markdown files.
@@ -183,6 +292,12 @@ To enable this feature, add the following to your `config.yaml`:
 
 ```yaml
 ConvertAppleToPDF: true
+```
+
+Or use the command-line flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex --convert-apple-pdf
 ```
 
 This feature is particularly useful for Evernote users who have stored Apple iWork documents in their notes, as Paperless doesn't natively support these formats.

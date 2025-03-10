@@ -81,12 +81,21 @@ func main() {
 				os.Exit(1)
 			}
 
+			// Get current settings to check UseFilenameAsTag
+			currentSettings, _ := config.GetConfig()
+
 			useFilenameAsTag, err := cmd.Flags().GetBool("use-filename-tag")
 			if err != nil {
 				fmt.Println("Error retrieving tag flag:", err)
 				os.Exit(1)
 			}
-			if useFilenameAsTag {
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("use-filename-tag") {
+				config.SetUseFilenameAsTag(useFilenameAsTag)
+			}
+
+			// Check both the flag and the config setting
+			if useFilenameAsTag || currentSettings.UseFilenameAsTag {
 				// Extract filename without path and extension
 				baseName := filepath.Base(args[0])
 				tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
@@ -104,7 +113,10 @@ func main() {
 				fmt.Println("Error retrieving unzip flag:", err)
 				os.Exit(1)
 			}
-			config.SetUnzip(unzip)
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("unzip") {
+				config.SetUnzip(unzip)
+			}
 
 			// set link field ID
 			linkFieldID, err := cmd.Flags().GetInt("link")
@@ -112,7 +124,10 @@ func main() {
 				fmt.Println("Error retrieving link flag:", err)
 				os.Exit(1)
 			}
-			config.SetLinkFieldID(linkFieldID)
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("link") || linkFieldID > 0 {
+				config.SetLinkFieldID(linkFieldID)
+			}
 
 			// set title prefix option
 			titlePrefix, err := cmd.Flags().GetBool("titleprefix")
@@ -120,7 +135,10 @@ func main() {
 				fmt.Println("Error retrieving titleprefix flag:", err)
 				os.Exit(1)
 			}
-			config.SetTitlePrefix(titlePrefix)
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("titleprefix") {
+				config.SetTitlePrefix(titlePrefix)
+			}
 
 			// set markdown conversion option
 			convertMarkdown, err := cmd.Flags().GetBool("convert-markdown")
@@ -128,7 +146,32 @@ func main() {
 				fmt.Println("Error retrieving convert-markdown flag:", err)
 				os.Exit(1)
 			}
-			config.SetConvertMarkdown(convertMarkdown)
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("convert-markdown") {
+				config.SetConvertMarkdown(convertMarkdown)
+			}
+
+			// set Apple to PDF conversion option
+			convertAppleToPDF, err := cmd.Flags().GetBool("convert-apple-pdf")
+			if err != nil {
+				fmt.Println("Error retrieving convert-apple-pdf flag:", err)
+				os.Exit(1)
+			}
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("convert-apple-pdf") {
+				config.SetConvertAppleToPDF(convertAppleToPDF)
+			}
+
+			// set concurrent workers
+			concurrent, err := cmd.Flags().GetInt("concurrent")
+			if err != nil {
+				fmt.Println("Error retrieving concurrent flag:", err)
+				os.Exit(1)
+			}
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("concurrent") && concurrent > 0 {
+				config.SetConcurrentWorkers(concurrent)
+			}
 		},
 
 		// run main function
@@ -165,6 +208,9 @@ func main() {
 	var convertMarkdown bool
 	rootCmd.PersistentFlags().BoolVarP(&convertMarkdown, "convert-markdown", "m", false, "Convert note content to markdown")
 
+	var convertAppleToPDF bool
+	rootCmd.PersistentFlags().BoolVar(&convertAppleToPDF, "convert-apple-pdf", false, "Convert Apple Pages and Numbers files to PDF")
+
 	// run root command
 	err := rootCmd.Execute()
 	if err != nil {
@@ -181,11 +227,23 @@ func importENEX(cmd *cobra.Command, args []string) {
 		slog.Info(fmt.Sprintf("Output to local storage is enabled. Target is: %v", settings.OutputFolder))
 	}
 
+	// Check if we need to add the filename as a tag
+	if settings.UseFilenameAsTag {
+		// Extract filename without path and extension
+		baseName := filepath.Base(args[0])
+		tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+
+		// Add to additional tags if not already added by the command-line flag
+		if !contains(settings.AdditionalTags, tagName) {
+			newTags := append(settings.AdditionalTags, tagName)
+			config.SetAdditionalTags(newTags)
+		}
+	}
+
 	// determine how many concurrent uploaders we want
-	howMany, err := cmd.Flags().GetInt("concurrent")
-	if err != nil {
-		slog.Error("failed to read flag", "error", err)
-		os.Exit(1)
+	howMany := settings.ConcurrentWorkers
+	if howMany <= 0 {
+		howMany = 1 // Default to 1 if not set in config
 	}
 
 	// prepare input file
@@ -274,6 +332,7 @@ func importENEX(cmd *cobra.Command, args []string) {
 		// this works on the retry channel
 		wg.Add(1)
 		go func() {
+			var err error
 			err = inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, settings.OutputFolder)
 			// inputFile.PrintNoteInfo(noteChannel)
 			if err != nil {
@@ -320,4 +379,13 @@ func getUserInput() string {
 	}
 
 	return string(char)
+}
+
+func contains(slice []string, item string) bool {
+	for _, i := range slice {
+		if i == item {
+			return true
+		}
+	}
+	return false
 }

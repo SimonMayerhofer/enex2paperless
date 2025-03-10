@@ -1,6 +1,7 @@
+# Required settings
 PaperlessAPI: http://localhost:8000
 # Username: admin
-# Password: admin123
+# Password: admin
 Token: eec905fc6539e6fedfb73a1a5cb4dd191d83c8df
 FileTypes:
   - pdf
@@ -10,5 +11,16 @@ FileTypes:
   - webp
   - gif
   - tiff
-# Whether to convert Apple (pages, numbers, keynote) files to PDF before uploading
-ConvertAppleToPDF: true
+
+# Optional settings
+# OutputFolder: ""           # Output to folder instead of Paperless
+# AdditionalTags:            # Additional tags to add to all documents
+#   - tag1
+#   - tag2
+# Unzip: false               # Whether to unzip .zip files found in notes
+# LinkFieldID: 0             # Custom field ID for document linking
+# TitlePrefix: false         # Whether to prefix filenames with note titles
+# ConvertMarkdown: false     # Whether to convert note content to markdown
+# ConvertAppleToPDF: false    # Whether to convert Apple Pages and Numbers files to PDF
+# ConcurrentWorkers: 1       # Number of concurrent workers
+# UseFilenameAsTag: false    # Whether to use the ENEX filename as a tag

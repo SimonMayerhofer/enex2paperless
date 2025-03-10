@@ -33,6 +33,8 @@ type Config struct {
 	TitlePrefix       bool     // Whether to prefix filenames with note titles
 	ConvertMarkdown   bool     // Whether to convert note content to markdown
 	ConvertAppleToPDF bool     // Whether to convert Apple Pages and Numbers files to PDF
+	ConcurrentWorkers int      // Number of concurrent workers
+	UseFilenameAsTag  bool     // Whether to use the ENEX filename as a tag
 }
 
 // GetConfig initializes and returns the application configuration.
@@ -57,8 +59,7 @@ func GetConfig() (Config, error) {
 		}
 
 		// Unmarshal into struct
-		err = k.UnmarshalWithConf("", &settings, koanf.UnmarshalConf{Tag: "koanf"})
-		if err != nil {
+		if err := k.Unmarshal("", &settings); err != nil {
 			initErr = fmt.Errorf("configuration error: %v", err)
 			return
 		}
@@ -124,5 +125,15 @@ func SetConvertMarkdown(convert bool) {
 
 // SetConvertAppleToPDF sets whether to convert Apple Pages and Numbers files to PDF
 func SetConvertAppleToPDF(convert bool) {
-	k.Set("convertappletopdf", convert)
+	settings.ConvertAppleToPDF = convert
+}
+
+// SetConcurrentWorkers sets the number of concurrent workers
+func SetConcurrentWorkers(workers int) {
+	settings.ConcurrentWorkers = workers
+}
+
+// SetUseFilenameAsTag sets whether to use the ENEX filename as a tag
+func SetUseFilenameAsTag(useFilenameAsTag bool) {
+	settings.UseFilenameAsTag = useFilenameAsTag
 }
