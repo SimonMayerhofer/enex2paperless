@@ -32,7 +32,7 @@ type Config struct {
 	LinkFieldID       int      // Custom field ID for document linking
 	TitlePrefix       bool     // Whether to prefix filenames with note titles
 	ConvertMarkdown   bool     // Whether to convert note content to markdown
-	ConvertAppleToPDF bool     // Whether to convert Apple Pages and Numbers files to PDF
+	ConvertAppleToPDF bool     // Whether to convert Apple iWork files to PDF
 	ConcurrentWorkers int      // Number of concurrent workers
 	UseFilenameAsTag  bool     // Whether to use the ENEX filename as a tag
 }
@@ -123,7 +123,7 @@ func SetConvertMarkdown(convert bool) {
 	settings.ConvertMarkdown = convert
 }
 
-// SetConvertAppleToPDF sets whether to convert Apple Pages and Numbers files to PDF
+// SetConvertAppleToPDF sets whether to convert Apple iWork files to PDF
 func SetConvertAppleToPDF(convert bool) {
 	settings.ConvertAppleToPDF = convert
 }

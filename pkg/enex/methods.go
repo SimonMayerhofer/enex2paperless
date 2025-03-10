@@ -119,7 +119,7 @@ func checkFileType(mimeType string, filename string) (bool, error) {
 		}
 	}
 
-	// Check if this is an Apple file by filename
+	// Check if this is an iWork file by filename
 	filenameLower := strings.ToLower(filename)
 	isAppleFile := strings.HasSuffix(filenameLower, ".pages") ||
 	               strings.HasSuffix(filenameLower, ".numbers") ||
@@ -154,30 +154,30 @@ func checkFileType(mimeType string, filename string) (bool, error) {
 		}
 	}
 
-	// If this is an Apple file and ConvertAppleToPDF is not enabled, skip it
+	// If this is an iWork file and ConvertAppleToPDF is not enabled, skip it
 	if isAppleFile {
-		slog.Debug("detected Apple file", "filename", filename, "mime_type", mimeType)
+		slog.Debug("detected iWork file", "filename", filename, "mime_type", mimeType)
 		if !settings.ConvertAppleToPDF {
-			slog.Info("skipping Apple file because ConvertAppleToPDF is not enabled", "filename", filename, "mime_type", mimeType)
+			slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled", "filename", filename, "mime_type", mimeType)
 			return false, nil
 		} else {
-			slog.Debug("allowing Apple file for PDF conversion", "filename", filename, "mime_type", mimeType)
+			slog.Debug("allowing iWork file for PDF conversion", "filename", filename, "mime_type", mimeType)
 			return true, nil
 		}
 	}
 
-	// For zip files, check if they might be Apple files
+	// For zip files, check if they might be iWork files
 	if mimeType == "application/zip" || mimeType == "application/octet-stream" {
-		// If the filename suggests it's an Apple file, handle it as above
+		// If the filename suggests it's an iWork file, handle it as above
 		if strings.HasSuffix(filenameLower, ".pages") ||
 		   strings.HasSuffix(filenameLower, ".numbers") ||
 		   strings.HasSuffix(filenameLower, ".key") {
-			slog.Debug("detected Apple file with zip MIME type", "filename", filename, "mime_type", mimeType)
+			slog.Debug("detected iWork file with zip MIME type", "filename", filename, "mime_type", mimeType)
 			if !settings.ConvertAppleToPDF {
-				slog.Info("skipping Apple file because ConvertAppleToPDF is not enabled", "filename", filename, "mime_type", mimeType)
+				slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled", "filename", filename, "mime_type", mimeType)
 				return false, nil
 			} else {
-				slog.Debug("allowing Apple file for PDF conversion", "filename", filename, "mime_type", mimeType)
+				slog.Debug("allowing iWork file for PDF conversion", "filename", filename, "mime_type", mimeType)
 				return true, nil
 			}
 		}
@@ -609,7 +609,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					slog.String("file", resource.ResourceAttributes.FileName),
 				)
 
-				// Check if this is an Apple file by filename
+				// Check if this is an iWork file by filename
 				filenameLower := strings.ToLower(resource.ResourceAttributes.FileName)
 				isAppleFile := strings.HasSuffix(filenameLower, ".pages") ||
 							   strings.HasSuffix(filenameLower, ".numbers") ||
@@ -624,9 +624,9 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					isAppleFile = true
 				}
 
-				// If this is an Apple file and conversion is disabled, skip it
+				// If this is an iWork file and conversion is disabled, skip it
 				if isAppleFile && !settings.ConvertAppleToPDF {
-					slog.Info("skipping Apple file because ConvertAppleToPDF is not enabled",
+					slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled",
 						"filename", resource.ResourceAttributes.FileName,
 						"mime_type", resource.Mime)
 					continue
@@ -724,12 +724,12 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 							continue
 						}
 
-						// Check if this is an Apple Pages or Numbers file that should be converted to PDF
+						// Check if this is an Apple iWork file that should be converted to PDF
 						uploadData := file.Data
 						uploadMimeType := file.MimeType
 						uploadFileName := file.Name
 
-						// Check if this is an Apple file that should be converted to PDF
+						// Check if this is an Apple iWork file that should be converted to PDF
 						isAppleFile := false
 						filenameLower := strings.ToLower(file.Name)
 						mimeTypeLower := strings.ToLower(file.MimeType)
@@ -758,7 +758,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 									slog.Error("failed to write temporary file for conversion", "error", err)
 								} else {
 									// Convert to PDF
-									slog.Info("converting extracted Apple file to PDF before upload",
+									slog.Info("converting extracted iWork file to PDF before upload",
 										"file", file.Name,
 										"mime_type", file.MimeType)
 
@@ -783,7 +783,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 								}
 							}
 						} else if isAppleFile && !settings.ConvertAppleToPDF {
-							slog.Debug("skipping Apple file because ConvertAppleToPDF is not enabled",
+							slog.Debug("skipping Apple iWork file because ConvertAppleToPDF is not enabled",
 								"filename", file.Name,
 								"mime_type", file.MimeType)
 							continue
@@ -928,7 +928,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						break
 					}
 
-					// Check if this is an Apple Pages or Numbers file that should be converted to PDF
+					// Check if this is an Apple iWork file that should be converted to PDF
 					if shouldConvertToPDF(resource.Mime) {
 						// Write the original file first
 						if err := afero.WriteFile(e.Fs, fileName, decodedData, 0644); err != nil {
@@ -938,7 +938,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						}
 
 						// Convert to PDF
-						slog.Info("converting Apple file to PDF",
+						slog.Info("converting Apple iWork file to PDF",
 							"file", fileName,
 							"mime_type", resource.Mime)
 						pdfData, pdfMimeType, err := convertAppleFileToPDF(e.Fs, fileName, resource.Mime, note.Created)
@@ -1091,7 +1091,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					resource.ResourceAttributes.FileName = note.Title
 				}
 
-				// Check if this is an Apple Pages or Numbers file that should be converted to PDF
+				// Check if this is an Apple iWork file that should be converted to PDF
 				uploadData := decodedData
 				uploadMimeType := resource.Mime
 				uploadFileName := resource.ResourceAttributes.FileName
@@ -1110,7 +1110,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 							slog.Error("failed to write temporary file for conversion", "error", err)
 						} else {
 							// Convert to PDF
-							slog.Info("converting Apple file to PDF before upload",
+							slog.Info("converting iWork file to PDF before upload",
 								"file", resource.ResourceAttributes.FileName,
 								"mime_type", resource.Mime)
 
@@ -1851,7 +1851,7 @@ func ensureCorrectExtension(filename string, mimeType string) string {
 	return basename + "." + currentExt
 }
 
-// convertAppleFileToPDF converts Apple Pages, Numbers, and Keynote files to PDF format
+// convertAppleFileToPDF converts Apple iWork (Pages, Numbers, and Keynote) files to PDF format
 // It uses AppleScript to automate the conversion process
 func convertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCreatedDate string) ([]byte, string, error) {
 	// Acquire the mutex to ensure only one Apple application is running at a time
@@ -1903,13 +1903,13 @@ func convertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCr
 	} else if ext == ".key" || strings.Contains(mimeTypeLower, "keynote") {
 		appName = "Keynote"
 	} else if mimeType == "application/zip" || mimeType == "application/octet-stream" {
-		// Try to determine if this is an Apple file based on the file contents
+		// Try to determine if this is an iWork file based on the file contents
 		fileData, err := os.ReadFile(absPath)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to read file: %v", err)
 		}
 
-		// Check if the zip file contains Apple file signatures
+		// Check if the zip file contains Apple iWork file signatures
 		if bytes.Contains(fileData, []byte("Pages")) {
 			appName = "Pages"
 		} else if bytes.Contains(fileData, []byte("Numbers")) {
@@ -1917,10 +1917,10 @@ func convertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCr
 		} else if bytes.Contains(fileData, []byte("Keynote")) {
 			appName = "Keynote"
 		} else {
-			return nil, "", fmt.Errorf("could not determine Apple file type for zip file: %s", filePath)
+			return nil, "", fmt.Errorf("could not determine Apple iWork file type for zip file: %s", filePath)
 		}
 	} else {
-		return nil, "", fmt.Errorf("unsupported Apple file type: %s", mimeType)
+		return nil, "", fmt.Errorf("unsupported Apple iWork file type: %s", mimeType)
 	}
 
 	// Generate the AppleScript for the determined app
@@ -2001,7 +2001,7 @@ func convertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCr
 }
 
 // shouldConvertToPDF checks if the file should be converted to PDF
-// Currently supports Apple Pages, Numbers, and Keynote files
+// Currently supports Apple iWork (Pages, Numbers, and Keynote) files
 func shouldConvertToPDF(mimeType string) bool {
 	// Get settings
 	settings, err := config.GetConfig()
@@ -2012,7 +2012,7 @@ func shouldConvertToPDF(mimeType string) bool {
 
 	// Check if conversion is enabled
 	if !settings.ConvertAppleToPDF {
-		slog.Debug("Apple to PDF conversion is disabled in config")
+		slog.Debug("Apple iWork to PDF conversion is disabled in config")
 		return false
 	}
 
@@ -2047,7 +2047,7 @@ func shouldConvertToPDF(mimeType string) bool {
 		return true
 	}
 
-	// Special case for zip files that might be Apple files
+	// Special case for zip files that might be Apple iWork files
 	// This should be handled by the caller checking the filename
 
 	slog.Debug("file will not be converted to PDF", "mime_type", mimeType)

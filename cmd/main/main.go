@@ -151,7 +151,7 @@ func main() {
 				config.SetConvertMarkdown(convertMarkdown)
 			}
 
-			// set Apple to PDF conversion option
+			// set Apple iWork to PDF conversion option
 			convertAppleToPDF, err := cmd.Flags().GetBool("convert-apple-pdf")
 			if err != nil {
 				fmt.Println("Error retrieving convert-apple-pdf flag:", err)
@@ -209,7 +209,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVarP(&convertMarkdown, "convert-markdown", "m", false, "Convert note content to markdown")
 
 	var convertAppleToPDF bool
-	rootCmd.PersistentFlags().BoolVar(&convertAppleToPDF, "convert-apple-pdf", false, "Convert Apple Pages and Numbers files to PDF")
+	rootCmd.PersistentFlags().BoolVar(&convertAppleToPDF, "convert-apple-pdf", false, "Convert Apple iWork files to PDF")
 
 	// run root command
 	err := rootCmd.Execute()

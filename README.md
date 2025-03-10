@@ -28,7 +28,7 @@ Usage:
 
 Flags:
   -c, --concurrent int        Number of concurrent consumers (default 1)
-      --convert-apple-pdf     Convert Apple Pages and Numbers files to PDF
+      --convert-apple-pdf     Convert Apple iWork files to PDF
   -m, --convert-markdown      Convert note content to markdown format
   -h, --help                  help for enex2paperless
   -l, --link int              Custom field ID for document linking
@@ -69,7 +69,7 @@ Unzip: false               # Whether to unzip .zip files found in notes
 LinkFieldID: 0             # Custom field ID for document linking
 TitlePrefix: false         # Whether to prefix filenames with note titles
 ConvertMarkdown: false     # Whether to convert note content to markdown
-ConvertAppleToPDF: false   # Whether to convert Apple Pages and Numbers files to PDF
+ConvertAppleToPDF: false   # Whether to convert Apple iWork files to PDF
 ConcurrentWorkers: 1       # Number of concurrent workers
 UseFilenameAsTag: false    # Whether to use the ENEX filename as a tag
 ```
