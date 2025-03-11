@@ -893,16 +893,39 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 													"size", len(pdfData))
 
 												// Try to set file timestamps
-												if noteTime, err := time.Parse("20060102T150405Z", note.Created); err == nil {
+												// First try to use the original file's timestamp if available
+												var fileTime time.Time
+
+												// If we have a timestamp from the original file, use it
+												if !file.FileTime.IsZero() {
+													fileTime = file.FileTime
+													slog.Debug("using original file timestamp for PDF file",
+														"file", pdfFilePath,
+														"time", fileTime)
+												} else if note.Created != "" {
+													// Fall back to the note's creation time
+													var err error
+													fileTime, err = time.Parse("20060102T150405Z", note.Created)
+													if err != nil {
+														slog.Error("failed to parse note creation time for PDF file", "error", err)
+													} else {
+														slog.Debug("using note creation time for PDF file",
+															"file", pdfFilePath,
+															"time", fileTime)
+													}
+												}
+
+												// Set the file timestamps if we have a valid time
+												if !fileTime.IsZero() {
 													if _, ok := e.Fs.(*afero.OsFs); ok {
-														if err := os.Chtimes(pdfFilePath, noteTime, noteTime); err != nil {
+														if err := os.Chtimes(pdfFilePath, fileTime, fileTime); err != nil {
 															slog.Error("failed to set PDF file timestamps", "error", err)
 														} else {
-															slog.Debug("set PDF file timestamps", "file", pdfFilePath, "time", noteTime)
+															slog.Debug("set PDF file timestamps", "file", pdfFilePath, "time", fileTime)
 														}
 													}
 												} else {
-													slog.Error("failed to parse note creation time for PDF file", "error", err)
+													slog.Debug("could not determine timestamp for PDF file", "file", pdfFilePath)
 												}
 											}
 										}
@@ -1453,6 +1476,7 @@ type ExtractedFile struct {
 	Data       []byte
 	MimeType   string
 	ZipFileName string
+	FileTime   time.Time // Original timestamp from the zip file
 }
 
 // unzipFile takes a byte slice of a zip file and extracts its contents to the specified directory
@@ -1524,6 +1548,32 @@ func unzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 			return extractedFiles, fmt.Errorf("failed to write file contents: %v", err)
 		}
 
+		// Get the original timestamp from the zip file
+		fileTime := file.Modified
+		if fileTime.IsZero() {
+			// Fall back to the legacy MS-DOS timestamp if the extended timestamp is not available
+			fileTime = file.FileInfo().ModTime()
+		}
+
+		// Set the file's timestamp to match the original file in the zip
+		if !fileTime.IsZero() {
+			// Only attempt to set timestamps if we're using the OS filesystem
+			if _, ok := fs.(*afero.OsFs); ok {
+				if err := os.Chtimes(filePath, fileTime, fileTime); err != nil {
+					slog.Error("failed to set file timestamps for extracted file",
+						"error", err,
+						"file", file.Name,
+						"time", fileTime)
+				} else {
+					slog.Debug("set file timestamps for extracted file",
+						"file", file.Name,
+						"time", fileTime)
+				}
+			}
+		} else {
+			slog.Debug("could not determine original timestamp for extracted file", "file", file.Name)
+		}
+
 		// Add file to extracted files list
 		extractedFiles = append(extractedFiles, ExtractedFile{
 			Path:       filePath,
@@ -1531,6 +1581,7 @@ func unzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 			Data:       buf.Bytes(),
 			MimeType:   mimeType,
 			ZipFileName: zipFileName,
+			FileTime:   fileTime,
 		})
 
 		slog.Info("extracted file from zip", "file", file.Name)
