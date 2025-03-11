@@ -26,6 +26,7 @@ type Config struct {
 	Password          string   `validate:"required_with=Username"`
 	Token             string   `validate:"required_without=Password"`
 	FileTypes         []string `validate:"required"`
+	ExcludeFileTypes  []string // File types to exclude when using "any" in FileTypes
 	OutputFolder      string
 	AdditionalTags    []string
 	Unzip             bool
@@ -142,4 +143,9 @@ func SetUseFilenameAsTag(useFilenameAsTag bool) {
 // SetCorrespondentTagPrefix sets the prefix for tags to be used as correspondents
 func SetCorrespondentTagPrefix(prefix string) {
 	settings.CorrespondentTagPrefix = prefix
+}
+
+// SetExcludeFileTypes sets the file types to exclude when using "any" in FileTypes
+func SetExcludeFileTypes(excludeFileTypes []string) {
+	settings.ExcludeFileTypes = excludeFileTypes
 }

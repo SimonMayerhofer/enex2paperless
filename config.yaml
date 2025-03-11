@@ -13,6 +13,11 @@ FileTypes:
   - tiff
 
 # Optional settings
+# ExcludeFileTypes:          # File types to exclude when using "any" in FileTypes
+#  - jpg
+#  - exe
+#  - psd
+#  - ai
 # OutputFolder: ""           # Output to folder instead of Paperless
 # AdditionalTags:            # Additional tags to add to all documents
 #   - tag1

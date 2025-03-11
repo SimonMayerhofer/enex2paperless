@@ -115,6 +115,38 @@ func checkFileType(mimeType string, filename string) (bool, error) {
 	// if filetypes contains "any" then allow all file types
 	for _, fileType := range settings.FileTypes {
 		if fileType == "any" {
+			// Check if the file type is in the exclude list
+			if len(settings.ExcludeFileTypes) > 0 {
+				// Extract the extension from the MIME type
+				extension, err := getExtensionFromMimeType(mimeType)
+				if err != nil {
+					return false, err
+				}
+
+				// If no extension was found from MIME type, try to get it from the filename
+				if extension == "" {
+					fileExt := filepath.Ext(filename)
+					if fileExt != "" {
+						// Remove the leading dot
+						extension = fileExt[1:]
+					}
+				}
+
+				// Convert extension and excluded file types to lowercase for case-insensitive comparison
+				extensionLower := strings.ToLower(extension)
+				excludedFileTypes := make([]string, len(settings.ExcludeFileTypes))
+				for i, fileType := range settings.ExcludeFileTypes {
+					excludedFileTypes[i] = strings.ToLower(fileType)
+				}
+
+				// Check if the extension matches any excluded file type
+				for _, excludedType := range excludedFileTypes {
+					if extensionLower == excludedType {
+						slog.Debug("skipping excluded file type", "filename", filename, "filetype", mimeType, "extension", extensionLower)
+						return false, nil
+					}
+				}
+			}
 			return true, nil
 		}
 	}
@@ -189,6 +221,15 @@ func checkFileType(mimeType string, filename string) (bool, error) {
 		return false, err
 	}
 
+	// If no extension was found from MIME type, try to get it from the filename
+	if extension == "" {
+		fileExt := filepath.Ext(filename)
+		if fileExt != "" {
+			// Remove the leading dot
+			extension = fileExt[1:]
+		}
+	}
+
 	// Convert extension and allowed file types to lowercase for case-insensitive comparison
 	extensionLower := strings.ToLower(extension)
 	allowedFileTypes := make([]string, len(settings.FileTypes))
@@ -213,8 +254,8 @@ func checkFileType(mimeType string, filename string) (bool, error) {
 func getExtensionFromMimeType(mimeType string) (string, error) {
 	mimeToExt := map[string]string{
 		// Microsoft Office - Modern formats
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":    "docx",
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         "xlsx",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 		"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
 
 		// Microsoft Office - Legacy formats
@@ -1377,6 +1418,21 @@ func unzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 			continue
 		}
 
+		// Get the MIME type of the file
+		mimeType := getMimeType(file.Name)
+
+		// Check if this file type should be processed
+		isWantedFileType, err := checkFileType(mimeType, file.Name)
+		if err != nil {
+			slog.Error("error when handling MIME type", "error", err, "filename", file.Name, "mimetype", mimeType)
+			continue
+		}
+
+		if !isWantedFileType {
+			slog.Debug("skipping unwanted extracted file type", "filename", file.Name, "filetype", mimeType)
+			continue
+		}
+
 		// Open the file in the zip
 		rc, err := file.Open()
 		if err != nil {
@@ -1412,7 +1468,7 @@ func unzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 			Path:       filePath,
 			Name:       file.Name,
 			Data:       buf.Bytes(),
-			MimeType:   getMimeType(file.Name),
+			MimeType:   mimeType,
 			ZipFileName: zipFileName,
 		})
 
@@ -1426,10 +1482,25 @@ func unzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 func getMimeType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
+	// Document formats
 	case ".pdf":
 		return "application/pdf"
 	case ".txt":
 		return "text/plain"
+	case ".rtf":
+		return "application/rtf"
+	case ".html", ".htm":
+		return "text/html"
+	case ".xml":
+		return "application/xml"
+	case ".json":
+		return "application/json"
+	case ".csv":
+		return "text/csv"
+	case ".md", ".markdown":
+		return "text/markdown"
+
+	// Image formats
 	case ".jpg", ".jpeg":
 		return "image/jpeg"
 	case ".png":
@@ -1440,13 +1511,56 @@ func getMimeType(filename string) string {
 		return "image/webp"
 	case ".tiff", ".tif":
 		return "image/tiff"
+	case ".svg":
+		return "image/svg+xml"
+	case ".bmp":
+		return "image/bmp"
+
+	// Microsoft Office formats
+	case ".doc":
+		return "application/msword"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xls":
+		return "application/vnd.ms-excel"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".ppt":
+		return "application/vnd.ms-powerpoint"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+	// Apple iWork formats
 	case ".pages":
 		return "application/vnd.apple.pages"
 	case ".numbers":
 		return "application/vnd.apple.numbers"
 	case ".key":
 		return "application/vnd.apple.keynote"
+
+	// Archive formats
+	case ".zip":
+		return "application/zip"
+	case ".rar":
+		return "application/x-rar-compressed"
+	case ".7z":
+		return "application/x-7z-compressed"
+	case ".tar":
+		return "application/x-tar"
+	case ".gz", ".gzip":
+		return "application/gzip"
+
+	// Executable formats
+	case ".exe":
+		return "application/x-msdownload"
+	case ".bat":
+		return "application/x-bat"
+	case ".sh":
+		return "application/x-sh"
+
+	// Default for unknown types
 	default:
+		slog.Debug("unknown file extension, using default MIME type", "filename", filename, "extension", ext)
 		return "application/octet-stream"
 	}
 }

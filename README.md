@@ -18,9 +18,9 @@ This tool was initially created by [kevinzehnder](https://github.com/kevinzehnde
 - ✅ **Prefix filenames with note title** when using output to folder option `Notetitle - filename.pdf`
 - ✅ **Add suffix for filename collisions** using output to folder option. E.g. scan-1.pdf, scan-2.pdf, etc.
 - ✅ **Fix file extensions for exported files** in case the evernote exported files have the wrong or missing extensions.
+- ✅ **Add option to exclude specific file types** when using the "any" option in FileTypes.
 
 Planned features:
-- ⚪ Exclude file type list to exclude specific file types
 - ⚪ Save files from notes witch had errors to folder
 
 ## How To Use
@@ -73,6 +73,10 @@ FileTypes:                              # List of file types to process
   - jpg
 
 # Optional settings
+ExcludeFileTypes:           # File types to exclude when using "any" in FileTypes
+  - gif
+  - svg
+  - psd
 AdditionalTags: []          # Additional tags to add to all documents
 ConvertMarkdown: false      # Whether to convert note content to markdown
 ConvertAppleToPDF: false    # Whether to convert Apple iWork files to PDF
@@ -114,6 +118,20 @@ If you want to upload any attachements, regardless, then you can include `any` i
 FileTypes:
   - any
 ```
+
+If you want to use the `any` option but exclude specific file types, you can use the `ExcludeFileTypes` setting:
+
+```yaml
+FileTypes:
+  - any
+ExcludeFileTypes:
+  - jpg
+  - exe
+  - psd
+  - ai
+```
+
+This will process all file types except for the ones listed in `ExcludeFileTypes`. The excluded files will also be skipped when extracting zip files.
 
 ### Multiple Concurrent Uploads
 
