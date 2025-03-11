@@ -624,16 +624,21 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 		return fmt.Errorf("failed to get config: %v", err)
 	}
 
-	// Initialize task tracker only if linking is enabled
-	if settings.LinkFieldID > 0 {
-		e.taskTracker = NewTaskTracker("tasks.json")
-		e.taskTracker.Fs = e.Fs
-		if err := e.taskTracker.Load(); err != nil {
-			slog.Error("failed to load tasks", "error", err)
-			return fmt.Errorf("failed to load tasks: %v", err)
-		}
+	// If outputFolder is specified, we don't need to initialize task tracker or make API calls
+	if outputFolder != "" {
+		slog.Info("output folder specified, skipping API calls and task processing", "folder", outputFolder)
 	} else {
-		slog.Info("skipping task tracking - no link field ID specified")
+		// Initialize task tracker only if linking is enabled
+		if settings.LinkFieldID > 0 {
+			e.taskTracker = NewTaskTracker("tasks.json")
+			e.taskTracker.Fs = e.Fs
+			if err := e.taskTracker.Load(); err != nil {
+				slog.Error("failed to load tasks", "error", err)
+				return fmt.Errorf("failed to load tasks: %v", err)
+			}
+		} else {
+			slog.Info("skipping task tracking - no link field ID specified")
+		}
 	}
 
 	url := fmt.Sprintf("%s/api/documents/post_document/", settings.PaperlessAPI)
@@ -893,6 +898,16 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 
 						fileNameWithoutExt := strings.TrimSuffix(uploadFileName, filepath.Ext(uploadFileName))
 						zipFileNameWithoutExt := strings.TrimSuffix(file.ZipFileName, filepath.Ext(file.ZipFileName))
+
+						// If we're using an output folder, we've already saved the extracted files
+						// No need to upload them to Paperless
+						if outputFolder != "" {
+							slog.Debug("skipping upload of extracted file - using output folder",
+								"file", uploadFileName,
+								"output_folder", outputFolder)
+							continue
+						}
+
 						id, err := e.uploadFileToPaperless(
 							note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt,
 							uploadFileName,
@@ -1304,6 +1319,14 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						"extension", filepath.Ext(resource.ResourceAttributes.FileName))
 				}
 
+				// Skip upload if we're using an output folder
+				if outputFolder != "" {
+					slog.Debug("skipping upload - using output folder",
+						"file", uploadFileName,
+						"output_folder", outputFolder)
+					continue
+				}
+
 				id, err := e.uploadFileToPaperless(documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, failedNoteChannel)
 				if err != nil {
 					failedNoteChannel <- note
@@ -1329,7 +1352,8 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 	}
 
 	// Process all pending tasks after all uploads are complete
-	if settings.LinkFieldID > 0 {
+	// Only if we're not using an output folder
+	if outputFolder == "" && settings.LinkFieldID > 0 {
 		slog.Info("processing all pending tasks")
 		if err := e.ProcessPendingTasks(); err != nil {
 			slog.Error("failed to process pending tasks", "error", err)
@@ -1340,6 +1364,8 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 		if err := e.LinkDocuments(); err != nil {
 			slog.Error("failed to link documents", "error", err)
 		}
+	} else if outputFolder != "" {
+		slog.Info("skipping task processing and document linking - using output folder")
 	} else {
 		slog.Info("skipping task processing and document linking - no link field ID specified")
 	}
@@ -1622,10 +1648,18 @@ func (e *EnexFile) LinkDocuments() error {
 
 	// If no tasks remain, delete the tasks.json file
 	if len(remainingTasks) == 0 {
-		if err := e.taskTracker.Fs.Remove(e.taskTracker.File); err != nil {
-			slog.Error("failed to delete tasks file", "error", err)
+		// Check if the file exists before trying to remove it
+		exists, err := afero.Exists(e.taskTracker.Fs, e.taskTracker.File)
+		if err != nil {
+			slog.Error("failed to check if tasks file exists", "error", err)
+		} else if exists {
+			if err := e.taskTracker.Fs.Remove(e.taskTracker.File); err != nil {
+				slog.Error("failed to delete tasks file", "error", err)
+			} else {
+				slog.Info("deleted tasks file - all tasks completed")
+			}
 		} else {
-			slog.Info("deleted tasks file - all tasks completed")
+			slog.Debug("tasks file does not exist, skipping removal", "file", e.taskTracker.File)
 		}
 	} else {
 		// Save remaining tasks
