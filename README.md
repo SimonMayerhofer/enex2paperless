@@ -72,6 +72,7 @@ ConvertMarkdown: false     # Whether to convert note content to markdown
 ConvertAppleToPDF: false   # Whether to convert Apple iWork files to PDF
 ConcurrentWorkers: 1       # Number of concurrent workers
 UseFilenameAsTag: false    # Whether to use the ENEX filename as a tag
+CorrespondentTagPrefix: "" # Prefix for tags to be used as correspondents
 ```
 
 To authenticate against Paperless, you can either use a token or a username/password combination. Don't configure both variations at the same time.
@@ -87,8 +88,8 @@ The `config.yaml` file supports the following settings:
 ```yaml
 # Required settings
 PaperlessAPI: http://paperboy.lan:8000   # URL of your Paperless instance
-Username: user                           # Username for Paperless (use with Password)
-Password: pass                           # Password for Paperless (use with Username)
+Username: user                           # Username for Paperless (use with Username)
+Password: pass                           # Password for Paperless (use with Password)
 Token:                                   # API token for Paperless (alternative to Username/Password)
 FileTypes:                               # List of file types to process
   - pdf
@@ -104,24 +105,26 @@ TitlePrefix: false                       # Whether to prefix filenames with note
 ConvertMarkdown: false                   # Whether to convert note content to markdown
 ConvertAppleToPDF: false                 # Whether to convert Apple iWork files to PDF
 ConcurrentWorkers: 1                     # Number of concurrent workers
-UseFilenameAsTag: false                 # Whether to use the ENEX filename as a tag
+UseFilenameAsTag: false                  # Whether to use the ENEX filename as a tag
+CorrespondentTagPrefix: ""               # Prefix for tags to be used as correspondents
 ```
 
 #### Command-line Arguments
 
 The following table shows the mapping between config.yaml settings and command-line arguments:
 
-| config.yaml setting | Command-line argument  | Description |
-|---------------------|------------------------|-------------|
-| OutputFolder        | -o, --outputfolder     | Output attachements to this folder, NOT paperless |
-| AdditionalTags      | -t, --tags             | Additional tags to add to all documents |
-| UseFilenameAsTag    | -T, --use-filename-tag | Add the ENEX filename as tag to all documents |
-| Unzip               | -u, --unzip            | Unzip .zip files found in notes |
-| LinkFieldID         | -l, --link             | Custom field ID for document linking |
-| TitlePrefix         | --titleprefix          | Prefix filenames with note titles |
-| ConvertMarkdown     | -m, --convert-markdown | Convert note content to markdown |
-| ConvertAppleToPDF   | --convert-apple-pdf    | Convert Apple iWork files to PDF |
-| ConcurrentWorkers   | -c, --concurrent       | Number of concurrent workers |
+| config.yaml setting    | Command-line argument      | Description |
+|------------------------|----------------------------|-------------|
+| OutputFolder           | -o, --outputfolder         | Output attachements to this folder, NOT paperless |
+| AdditionalTags         | -t, --tags                 | Additional tags to add to all documents |
+| UseFilenameAsTag       | -T, --use-filename-tag     | Add the ENEX filename as tag to all documents |
+| Unzip                  | -u, --unzip                | Unzip .zip files found in notes |
+| LinkFieldID            | -l, --link                 | Custom field ID for document linking |
+| TitlePrefix            | --titleprefix              | Prefix filenames with note titles |
+| ConvertMarkdown        | -m, --convert-markdown     | Convert note content to markdown |
+| ConvertAppleToPDF      | --convert-apple-pdf        | Convert Apple iWork files to PDF |
+| ConcurrentWorkers      | -c, --concurrent           | Number of concurrent workers |
+| CorrespondentTagPrefix | --correspondent-tag-prefix | Prefix for tags to be used as correspondents |
 
 - Open `cmd.exe`
 - Navigate to the folder where you extracted the files, e.g.: `cd C:\Users\JohnDoe\Desktop`
@@ -223,6 +226,35 @@ UseFilenameAsTag: true
 This will add "MyEnexFile" as a tag to all processed files.
 
 If you use neither the `-t` or `-T` flags, no additional tags will be added, and only the original Evernote tags will be preserved.
+
+### Tags as Correspondents
+
+You can automatically convert tags with a specific prefix to Paperless correspondents. This is useful if you use tags in Evernote to mark the sender or recipient of a document.
+
+To enable this feature, use the `--correspondent-tag-prefix` flag followed by the prefix you use (e.g., "@"):
+
+```shell
+enex2paperless.exe MyEnexFile.enex --correspondent-tag-prefix "@"
+```
+
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+CorrespondentTagPrefix: "@"
+```
+
+When this feature is enabled:
+
+1. The first tag with the specified prefix will be used as the correspondent
+2. The prefix will be removed from the name when creating the correspondent
+3. The correspondent name will be formatted with proper capitalization (e.g., "@john doe" becomes "John Doe")
+4. If multiple tags have the prefix, only the first one will be used as a correspondent; the others will be kept as regular tags
+5. If a correspondent with the same name already exists, it will be reused
+
+For example, if your note has tags ["@john doe", "invoice", "@jane smith"], and you set the correspondent tag prefix to "@", then:
+- "John Doe" will be set as the correspondent
+- "invoice" will be kept as a tag
+- "@jane smith" will be kept as a tag (with the "@" prefix)
 
 ### Unzip Attachments
 

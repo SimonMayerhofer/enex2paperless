@@ -35,6 +35,7 @@ type Config struct {
 	ConvertAppleToPDF bool     // Whether to convert Apple iWork files to PDF
 	ConcurrentWorkers int      // Number of concurrent workers
 	UseFilenameAsTag  bool     // Whether to use the ENEX filename as a tag
+	CorrespondentTagPrefix string // Prefix for tags to be used as correspondents
 }
 
 // GetConfig initializes and returns the application configuration.
@@ -136,4 +137,9 @@ func SetConcurrentWorkers(workers int) {
 // SetUseFilenameAsTag sets whether to use the ENEX filename as a tag
 func SetUseFilenameAsTag(useFilenameAsTag bool) {
 	settings.UseFilenameAsTag = useFilenameAsTag
+}
+
+// SetCorrespondentTagPrefix sets the prefix for tags to be used as correspondents
+func SetCorrespondentTagPrefix(prefix string) {
+	settings.CorrespondentTagPrefix = prefix
 }

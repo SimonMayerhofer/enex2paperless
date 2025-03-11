@@ -172,6 +172,17 @@ func main() {
 			if cmd.Flags().Changed("concurrent") && concurrent > 0 {
 				config.SetConcurrentWorkers(concurrent)
 			}
+
+			// set correspondent tag prefix
+			correspondentTagPrefix, err := cmd.Flags().GetString("correspondent-tag-prefix")
+			if err != nil {
+				fmt.Println("Error retrieving correspondent-tag-prefix flag:", err)
+				os.Exit(1)
+			}
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("correspondent-tag-prefix") {
+				config.SetCorrespondentTagPrefix(correspondentTagPrefix)
+			}
 		},
 
 		// run main function
@@ -210,6 +221,9 @@ func main() {
 
 	var convertAppleToPDF bool
 	rootCmd.PersistentFlags().BoolVar(&convertAppleToPDF, "convert-apple-pdf", false, "Convert Apple iWork files to PDF")
+
+	var correspondentTagPrefix string
+	rootCmd.PersistentFlags().StringVar(&correspondentTagPrefix, "correspondent-tag-prefix", "", "Prefix for tags to be used as correspondents (e.g. '@')")
 
 	// run root command
 	err := rootCmd.Execute()

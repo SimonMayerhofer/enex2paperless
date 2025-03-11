@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -161,4 +162,156 @@ func ConvertDateFormat(dateStr string) (string, error) {
 
 	// Convert time.Time to the desired string format
 	return parsedTime.Format("2006-01-02 15:04:05-07:00"), nil
+}
+
+// GetCorrespondentID retrieves the ID of a correspondent by name
+func GetCorrespondentID(correspondentName string) (int, error) {
+	settings, _ := config.GetConfig()
+
+	// Use HTTP client to send GET request
+	url := fmt.Sprintf("%v/api/correspondents/?name__iexact=%s", settings.PaperlessAPI, url.QueryEscape(correspondentName))
+
+	req, err := http.NewRequest("GET", url, nil)
+
+	// auth
+	if settings.Token != "" {
+		req.Header.Set("Authorization", "Token "+settings.Token)
+	} else {
+		req.SetBasicAuth(settings.Username, settings.Password)
+	}
+
+	// Send the request
+	slog.Debug("sending GET request for correspondent")
+
+	slog.Debug("request details",
+		"method", req.Method,
+		"url", req.URL.String(),
+		"headers", req.Header)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("failed to retrieve correspondents: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		// print response body
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+
+		slog.Error("non 200 status code received", "status code", resp.StatusCode, "body", buf.String())
+
+		return 0, fmt.Errorf("non 200 status code")
+	}
+
+	var correspondentResponse struct {
+		Count   int `json:"count"`
+		Results []struct {
+			ID int `json:"id"`
+		} `json:"results"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&correspondentResponse); err != nil {
+		return 0, fmt.Errorf("failed to decode response: %v", err)
+	}
+
+	if correspondentResponse.Count == 0 {
+		slog.Debug("no correspondent found with name", "name", correspondentName)
+		return 0, nil // Correspondent not found, but not an error
+	}
+
+	return correspondentResponse.Results[0].ID, nil // Return the ID of the first matching correspondent
+}
+
+// CreateCorrespondent creates a new correspondent with the given name
+func CreateCorrespondent(correspondentName string) (int, error) {
+	settings, _ := config.GetConfig()
+
+	url := fmt.Sprintf("%v/api/correspondents/", settings.PaperlessAPI)
+	jsonData, err := json.Marshal(map[string]interface{}{
+		"name": correspondentName,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal JSON: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// auth
+	if settings.Token != "" {
+		req.Header.Set("Authorization", "Token "+settings.Token)
+	} else {
+		req.SetBasicAuth(settings.Username, settings.Password)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	slog.Debug("request details",
+		"method", req.Method,
+		"url", req.URL.String(),
+		"headers", req.Header,
+		"body", string(jsonData))
+
+	// send request
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 201 {
+		// If creation failed, the correspondent might have been created by another goroutine
+		// Try to get the correspondent ID again
+		id, err := GetCorrespondentID(correspondentName)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create correspondent and couldn't verify if it exists: %v", err)
+		}
+		if id != 0 {
+			// Correspondent exists now, probably created by another goroutine
+			slog.Debug("correspondent was created by another process", "correspondent", correspondentName, "id", id)
+			return id, nil
+		}
+
+		// If we still can't find the correspondent, then there's a real error
+		slog.Error("non 201 status code received", "status code", resp.StatusCode)
+
+		// print response body
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		slog.Error("response:", "body", buf.String())
+
+		return 0, fmt.Errorf("failed to create correspondent")
+	}
+
+	// read response
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	// Unmarshal the response to get the correspondent ID
+	var correspondentResponse CorrespondentResponse
+	err = json.Unmarshal(bodyBytes, &correspondentResponse)
+	if err != nil {
+		return 0, fmt.Errorf("failed to unmarshal response: %v", err)
+	}
+	return correspondentResponse.ID, nil
+}
+
+type CorrespondentResponse struct {
+	ID int `json:"id"`
+	// Other fields, if necessary
+}
+
+// FormatCorrespondentName formats a correspondent name to have the first letter of each word capitalized
+func FormatCorrespondentName(name string) string {
+	words := strings.Fields(name)
+	for i, word := range words {
+		if len(word) > 0 {
+			words[i] = strings.ToUpper(word[0:1]) + strings.ToLower(word[1:])
+		}
+	}
+	return strings.Join(words, " ")
 }

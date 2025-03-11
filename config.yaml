@@ -24,3 +24,4 @@ FileTypes:
 # ConvertAppleToPDF: false    # Whether to convert Apple iWork files to PDF
 # ConcurrentWorkers: 1       # Number of concurrent workers
 # UseFilenameAsTag: false    # Whether to use the ENEX filename as a tag
+# CorrespondentTagPrefix: "@"  # Prefix for tags to be used as correspondents

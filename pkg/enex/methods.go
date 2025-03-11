@@ -300,10 +300,7 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 	}
 	_ = writer.WriteField("created", formattedCreatedDate)
 
-	// Get or create tag IDs
-	var tagIDs []int
-
-	// Get settings for additional tags
+	// Get settings for additional tags and correspondent tag prefix
 	settings, err := config.GetConfig()
 	if err != nil {
 		failedNoteChannel <- note
@@ -311,8 +308,72 @@ func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType
 		return 0, fmt.Errorf("failed to get config: %v", err)
 	}
 
-	// Combine note.Tags and additional tags into one slice to process
-	allTags := append([]string{}, note.Tags...)
+	// Check for correspondent tag prefix
+	var correspondentID int
+	var tagsToProcess []string
+	var correspondentTagFound bool
+
+	if settings.CorrespondentTagPrefix != "" {
+		for _, tagName := range note.Tags {
+			if strings.HasPrefix(tagName, settings.CorrespondentTagPrefix) {
+				if !correspondentTagFound {
+					// This is the first tag with the prefix, use it as correspondent
+					correspondentTagFound = true
+
+					// Remove the prefix and format the correspondent name
+					correspondentName := strings.TrimPrefix(tagName, settings.CorrespondentTagPrefix)
+					formattedName := paperless.FormatCorrespondentName(correspondentName)
+
+					// Get or create correspondent
+					id, err := paperless.GetCorrespondentID(formattedName)
+					if err != nil {
+						failedNoteChannel <- note
+						slog.Error("failed to check for correspondent", "error", err)
+						return 0, fmt.Errorf("failed to check for correspondent: %v", err)
+					}
+
+					if id == 0 {
+						slog.Debug("creating correspondent", "correspondent", formattedName)
+						id, err = paperless.CreateCorrespondent(formattedName)
+						if err != nil {
+							failedNoteChannel <- note
+							slog.Error("couldn't create correspondent", "error", err)
+							return 0, fmt.Errorf("couldn't create correspondent: %v", err)
+						}
+					} else {
+						slog.Debug(fmt.Sprintf("found correspondent: %s with ID: %v", formattedName, id))
+					}
+
+					correspondentID = id
+				} else {
+					// This is a second or subsequent tag with the prefix, keep it as a tag
+					tagsToProcess = append(tagsToProcess, tagName)
+				}
+			} else {
+				// Regular tag without prefix
+				tagsToProcess = append(tagsToProcess, tagName)
+			}
+		}
+	} else {
+		// No correspondent tag prefix set, process all tags normally
+		tagsToProcess = note.Tags
+	}
+
+	// Set correspondent ID if found
+	if correspondentID > 0 {
+		err = writer.WriteField("correspondent", strconv.Itoa(correspondentID))
+		if err != nil {
+			failedNoteChannel <- note
+			slog.Error("couldn't write correspondent field", "error", err)
+			return 0, fmt.Errorf("couldn't write correspondent field: %v", err)
+		}
+	}
+
+	// Get or create tag IDs
+	var tagIDs []int
+
+	// Combine processed tags and additional tags into one slice to process
+	allTags := append([]string{}, tagsToProcess...)
 	if len(settings.AdditionalTags) > 0 {
 		allTags = append(allTags, settings.AdditionalTags...)
 	}
@@ -1047,8 +1108,69 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 				// Get or create tag IDs
 				var tagIDs []int
 
-				// Combine note.Tags and additional tags into one slice to process
-				allTags := append([]string{}, note.Tags...)
+				// Check for correspondent tag prefix
+				var correspondentID int
+				var tagsToProcess []string
+				var correspondentTagFound bool
+
+				if settings.CorrespondentTagPrefix != "" {
+					for _, tagName := range note.Tags {
+						if strings.HasPrefix(tagName, settings.CorrespondentTagPrefix) {
+							if !correspondentTagFound {
+								// This is the first tag with the prefix, use it as correspondent
+								correspondentTagFound = true
+
+								// Remove the prefix and format the correspondent name
+								correspondentName := strings.TrimPrefix(tagName, settings.CorrespondentTagPrefix)
+								formattedName := paperless.FormatCorrespondentName(correspondentName)
+
+								// Get or create correspondent
+								id, err := paperless.GetCorrespondentID(formattedName)
+								if err != nil {
+									failedNoteChannel <- note
+									slog.Error("failed to check for correspondent", "error", err)
+									break
+								}
+
+								if id == 0 {
+									slog.Debug("creating correspondent", "correspondent", formattedName)
+									id, err = paperless.CreateCorrespondent(formattedName)
+									if err != nil {
+										failedNoteChannel <- note
+										slog.Error("couldn't create correspondent", "error", err)
+										break
+									}
+								} else {
+									slog.Debug(fmt.Sprintf("found correspondent: %s with ID: %v", formattedName, id))
+								}
+
+								correspondentID = id
+							} else {
+								// This is a second or subsequent tag with the prefix, keep it as a tag
+								tagsToProcess = append(tagsToProcess, tagName)
+							}
+						} else {
+							// Regular tag without prefix
+							tagsToProcess = append(tagsToProcess, tagName)
+						}
+					}
+				} else {
+					// No correspondent tag prefix set, process all tags normally
+					tagsToProcess = note.Tags
+				}
+
+				// Set correspondent ID if found
+				if correspondentID > 0 {
+					err = writer.WriteField("correspondent", strconv.Itoa(correspondentID))
+					if err != nil {
+						failedNoteChannel <- note
+						slog.Error("couldn't write correspondent field", "error", err)
+						break
+					}
+				}
+
+				// Combine processed tags and additional tags into one slice to process
+				allTags := append([]string{}, tagsToProcess...)
 				if len(settings.AdditionalTags) > 0 {
 					allTags = append(allTags, settings.AdditionalTags...)
 				}
