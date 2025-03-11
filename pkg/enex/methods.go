@@ -879,6 +879,34 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 										uploadData = pdfData
 										uploadMimeType = pdfMimeType
 										uploadFileName = strings.TrimSuffix(file.Name, filepath.Ext(file.Name)) + ".pdf"
+
+										// If we're using an output folder, write the PDF file to disk
+										if outputFolder != "" {
+											pdfFilePath := filepath.Join(outputFolder, uploadFileName)
+											if err := afero.WriteFile(e.Fs, pdfFilePath, pdfData, 0644); err != nil {
+												slog.Error("failed to write converted PDF file to disk",
+													"error", err,
+													"file", pdfFilePath)
+											} else {
+												slog.Debug("wrote converted PDF file to disk",
+													"file", pdfFilePath,
+													"size", len(pdfData))
+
+												// Try to set file timestamps
+												if noteTime, err := time.Parse("20060102T150405Z", note.Created); err == nil {
+													if _, ok := e.Fs.(*afero.OsFs); ok {
+														if err := os.Chtimes(pdfFilePath, noteTime, noteTime); err != nil {
+															slog.Error("failed to set PDF file timestamps", "error", err)
+														} else {
+															slog.Debug("set PDF file timestamps", "file", pdfFilePath, "time", noteTime)
+														}
+													}
+												} else {
+													slog.Error("failed to parse note creation time for PDF file", "error", err)
+												}
+											}
+										}
+
 										slog.Info("successfully converted extracted file to PDF",
 											"original_file", file.Name,
 											"pdf_file", uploadFileName,
@@ -1072,6 +1100,13 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 							// Update the filename to reflect the PDF extension
 							ext := filepath.Ext(fileName)
 							fileName = strings.TrimSuffix(fileName, ext) + ".pdf"
+
+							// Write the converted PDF file to disk
+							if err := afero.WriteFile(e.Fs, fileName, pdfData, 0644); err != nil {
+								failedNoteChannel <- note
+								slog.Error(fmt.Sprintf("failed to write PDF file %v", err))
+								break
+							}
 
 							slog.Info("successfully converted file to PDF",
 								"original_file", filename,
