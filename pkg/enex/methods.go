@@ -1105,6 +1105,46 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 							break
 						}
 
+						// Get timestamp for the file - try resource timestamp first, then note creation time
+						var fileTime time.Time
+						if resource.ResourceAttributes.Timestamp != "" {
+							parsedTime, err := time.Parse("20060102T150405Z", resource.ResourceAttributes.Timestamp)
+							if err != nil {
+								slog.Debug("failed to parse resource timestamp, using note creation time",
+									"error", err,
+									"resource_timestamp", resource.ResourceAttributes.Timestamp)
+								fileTime, err = time.Parse("20060102T150405Z", note.Created)
+								if err != nil {
+									slog.Error("failed to parse note creation time", "error", err)
+								}
+							} else {
+								fileTime = parsedTime
+								slog.Debug("using resource timestamp for iWork file",
+									"file", fileName,
+									"time", fileTime)
+							}
+						} else {
+							fileTime, err = time.Parse("20060102T150405Z", note.Created)
+							if err != nil {
+								slog.Error("failed to parse note creation time", "error", err)
+							} else {
+								slog.Debug("using note creation time for iWork file (no resource timestamp)",
+									"file", fileName,
+									"time", fileTime)
+							}
+						}
+
+						// Set timestamp for the original iWork file before conversion
+						if !fileTime.IsZero() {
+							if _, ok := e.Fs.(*afero.OsFs); ok {
+								if err := os.Chtimes(fileName, fileTime, fileTime); err != nil {
+									slog.Error("failed to set timestamps for original iWork file", "error", err)
+								} else {
+									slog.Debug("set timestamps for original iWork file", "file", fileName, "time", fileTime)
+								}
+							}
+						}
+
 						// Convert to PDF
 						slog.Info("converting Apple iWork file to PDF",
 							"file", fileName,
