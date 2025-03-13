@@ -1,4 +1,4 @@
-package enex
+package helpers
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,81 +19,9 @@ import (
 // Global mutex to ensure only one Apple application runs at a time
 var appleAppMutex sync.Mutex
 
-// sanitizeFilename removes or replaces characters that are invalid in filenames
-func sanitizeFilename(filename string) string {
-	// Replace invalid characters with underscores
-	invalidChars := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
-	filename = invalidChars.ReplaceAllString(filename, "_")
-
-	// Remove leading/trailing spaces and dots
-	filename = strings.Trim(filename, " .")
-
-	// If filename is empty after sanitization, return a default name
-	if filename == "" {
-		return "untitled"
-	}
-
-	return filename
-}
-
-// ensureCorrectExtension makes sure the filename has the correct extension based on MIME type
-func ensureCorrectExtension(filename string, mimeType string) string {
-	if mimeType == "" {
-		// Even if no MIME type, ensure existing extension is lowercase
-		ext := filepath.Ext(filename)
-		if ext != "" {
-			basename := strings.TrimSuffix(filename, ext)
-			return basename + strings.ToLower(ext)
-		}
-		return filename
-	}
-
-	expectedExt, err := getExtensionFromMimeType(mimeType)
-	if err != nil || expectedExt == "" {
-		// If error getting MIME extension or no known mapping,
-		// preserve the existing extension but ensure it's lowercase
-		ext := filepath.Ext(filename)
-		if ext != "" {
-			basename := strings.TrimSuffix(filename, ext)
-			return basename + strings.ToLower(ext)
-		}
-		return filename
-	}
-
-	// Normalize extensions
-	expectedExt = strings.ToLower(expectedExt)
-	switch expectedExt {
-	case "jpeg":
-		expectedExt = "jpg"
-	case "plain":
-		expectedExt = "txt"
-	}
-
-	// Get current extension
-	currentExt := strings.ToLower(filepath.Ext(filename))
-	if currentExt == "" {
-		// No extension, add the expected one
-		return filename + "." + expectedExt
-	}
-
-	// Remove the dot from current extension
-	currentExt = strings.TrimPrefix(currentExt, ".")
-
-	// If extensions don't match and we have a known mapping, replace with correct one
-	if currentExt != expectedExt {
-		// Remove current extension and add the correct one
-		basename := strings.TrimSuffix(filename, filepath.Ext(filename))
-		return basename + "." + expectedExt
-	}
-
-	// Extensions match or we're keeping the existing one, but ensure it's lowercase
-	basename := strings.TrimSuffix(filename, filepath.Ext(filename))
-	return basename + "." + currentExt
-}
-
 // convertAppleFileToPDF converts Apple iWork (Pages, Numbers, and Keynote) files to PDF format
 // It uses AppleScript to automate the conversion process
-func convertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCreatedDate string) ([]byte, string, error) {
+func ConvertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCreatedDate string) ([]byte, string, error) {
 	// Acquire the mutex to ensure only one Apple application is running at a time
 	slog.Debug("acquiring lock for Apple application", "file", filePath)
 	appleAppMutex.Lock()
@@ -241,28 +168,9 @@ func convertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCr
 	return pdfData, "application/pdf", nil
 }
 
-// removeInt removes an integer from a slice
-func removeInt(slice []int, s int) []int {
-	for i, v := range slice {
-		if v == s {
-			return append(slice[:i], slice[i+1:]...)
-		}
-	}
-	return slice
-}
-
-// getMapKeys gets map keys for logging
-func getMapKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // shouldConvertToPDF checks if the file should be converted to PDF
 // Currently supports Apple iWork (Pages, Numbers, and Keynote) files
-func shouldConvertToPDF(mimeType string) bool {
+func ShouldConvertToPDF(mimeType string) bool {
 	// Get settings
 	settings, err := config.GetConfig()
 	if err != nil {
@@ -300,9 +208,9 @@ func shouldConvertToPDF(mimeType string) bool {
 
 	// Check for substring matches
 	if strings.Contains(mimeTypeLower, "pages") ||
-	   strings.Contains(mimeTypeLower, "numbers") ||
-	   strings.Contains(mimeTypeLower, "keynote") ||
-	   strings.Contains(mimeTypeLower, "iwork") {
+		strings.Contains(mimeTypeLower, "numbers") ||
+		strings.Contains(mimeTypeLower, "keynote") ||
+		strings.Contains(mimeTypeLower, "iwork") {
 		slog.Debug("file will be converted to PDF (MIME type substring match)", "mime_type", mimeType)
 		return true
 	}
