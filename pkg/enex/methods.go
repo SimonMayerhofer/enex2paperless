@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,264 +316,6 @@ func calculateChecksum(data []byte) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// uploadFileToPaperless handles the common upload logic for both regular and extracted files
-func (e *EnexFile) uploadFileToPaperless(title string, fileName string, mimeType string, data []byte, note Note, url string, failedNoteChannel chan Note) (int, error) {
-	// Create a new buffer and multipart writer for form
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	var bodyBytes []byte
-	var docIDStr string
-
-	// Set form fields
-	err := writer.WriteField("title", title)
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("error setting form fields", "error", err)
-		return 0, fmt.Errorf("error setting form fields: %v", err)
-	}
-
-	formattedCreatedDate, err := paperless.ConvertDateFormat(note.Created)
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("error converting date format", "error", err)
-		return 0, fmt.Errorf("error converting date format: %v", err)
-	}
-	_ = writer.WriteField("created", formattedCreatedDate)
-
-	// Get settings for additional tags and correspondent tag prefix
-	settings, err := config.GetConfig()
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("failed to get config", "error", err)
-		return 0, fmt.Errorf("failed to get config: %v", err)
-	}
-
-	// Check for correspondent tag prefix
-	var correspondentID int
-	var tagsToProcess []string
-	var correspondentTagFound bool
-
-	if settings.CorrespondentTagPrefix != "" {
-		for _, tagName := range note.Tags {
-			if strings.HasPrefix(tagName, settings.CorrespondentTagPrefix) {
-				if !correspondentTagFound {
-					// This is the first tag with the prefix, use it as correspondent
-					correspondentTagFound = true
-
-					// Remove the prefix and format the correspondent name
-					correspondentName := strings.TrimPrefix(tagName, settings.CorrespondentTagPrefix)
-					formattedName := paperless.FormatCorrespondentName(correspondentName)
-
-					// Get or create correspondent
-					id, err := paperless.GetCorrespondentID(formattedName)
-					if err != nil {
-						failedNoteChannel <- note
-						slog.Error("failed to check for correspondent", "error", err)
-						return 0, fmt.Errorf("failed to check for correspondent: %v", err)
-					}
-
-					if id == 0 {
-						slog.Debug("creating correspondent", "correspondent", formattedName)
-						id, err = paperless.CreateCorrespondent(formattedName)
-						if err != nil {
-							failedNoteChannel <- note
-							slog.Error("couldn't create correspondent", "error", err)
-							return 0, fmt.Errorf("couldn't create correspondent: %v", err)
-						}
-					} else {
-						slog.Debug(fmt.Sprintf("found correspondent: %s with ID: %v", formattedName, id))
-					}
-
-					correspondentID = id
-				} else {
-					// This is a second or subsequent tag with the prefix, keep it as a tag
-					tagsToProcess = append(tagsToProcess, tagName)
-				}
-			} else {
-				// Regular tag without prefix
-				tagsToProcess = append(tagsToProcess, tagName)
-			}
-		}
-	} else {
-		// No correspondent tag prefix set, process all tags normally
-		tagsToProcess = note.Tags
-	}
-
-	// Set correspondent ID if found
-	if correspondentID > 0 {
-		err = writer.WriteField("correspondent", strconv.Itoa(correspondentID))
-		if err != nil {
-			failedNoteChannel <- note
-			slog.Error("couldn't write correspondent field", "error", err)
-			return 0, fmt.Errorf("couldn't write correspondent field: %v", err)
-		}
-	}
-
-	// Get or create tag IDs
-	var tagIDs []int
-
-	// Combine processed tags and additional tags into one slice to process
-	allTags := append([]string{}, tagsToProcess...)
-	if len(settings.AdditionalTags) > 0 {
-		allTags = append(allTags, settings.AdditionalTags...)
-	}
-
-	for _, tagName := range allTags {
-		id, err := paperless.GetTagID(tagName)
-		if err != nil {
-			failedNoteChannel <- note
-			slog.Error("failed to check for tag", "error", err)
-			return 0, fmt.Errorf("failed to check for tag: %v", err)
-		}
-
-		if id == 0 {
-			slog.Debug("creating tag", "tag", tagName)
-			id, err = paperless.CreateTag(tagName)
-			if err != nil {
-				failedNoteChannel <- note
-				slog.Error("couldn't create tag", "error", err)
-				return 0, fmt.Errorf("couldn't create tag: %v", err)
-			}
-		} else {
-			slog.Debug(fmt.Sprintf("found tag: %s with ID: %v", tagName, id))
-		}
-
-		tagIDs = append(tagIDs, id)
-	}
-
-	// Add tag IDs to POST request
-	for _, id := range tagIDs {
-		err = writer.WriteField("tags", strconv.Itoa(id))
-		if err != nil {
-			failedNoteChannel <- note
-			slog.Error("couldn't write fields", "error", err)
-			return 0, fmt.Errorf("couldn't write fields: %v", err)
-		}
-	}
-
-	// Create form file header
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="document"; filename="%s"`, fileName))
-	h.Set("Content-Type", mimeType)
-
-	// Create the file field with the header and write data into it
-	part, err := writer.CreatePart(h)
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("error creating multipart writer", "error", err)
-		return 0, fmt.Errorf("error creating multipart writer: %v", err)
-	}
-
-	_, err = io.Copy(part, bytes.NewReader(data))
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("error writing file data", "error", err)
-		return 0, fmt.Errorf("error writing file data: %v", err)
-	}
-
-	// Close the writer to finish the multipart content
-	writer.Close()
-
-	// Create a new HTTP request
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("error creating new HTTP request", "error", err)
-		return 0, fmt.Errorf("error creating new HTTP request: %v", err)
-	}
-
-	// auth
-	if settings.Token != "" {
-		req.Header.Set("Authorization", "Token "+settings.Token)
-	} else {
-		req.SetBasicAuth(settings.Username, settings.Password)
-	}
-
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	// Send the request
-	slog.Debug("sending POST request", "file", fileName)
-	slog.Debug("request details", "method", req.Method, "url", req.URL.String(), "headers", req.Header)
-
-	resp, err := e.client.Do(req)
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("error making POST request", "error", err)
-		return 0, fmt.Errorf("error making POST request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		// print response body
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(resp.Body)
-		failedNoteChannel <- note
-		slog.Error("non 200 status code received", "status code", resp.StatusCode)
-		slog.Error("response:", "body", buf.String())
-		return 0, fmt.Errorf("non 200 status code received (%d): %s", resp.StatusCode, buf.String())
-	}
-
-	// Read the response body
-	bodyBytes, err = io.ReadAll(resp.Body)
-	if err != nil {
-		failedNoteChannel <- note
-		slog.Error("error reading response body", "error", err)
-		return 0, fmt.Errorf("error reading response body: %v", err)
-	}
-
-	// Try to unmarshal as a string first (UUID)
-	if err := json.Unmarshal(bodyBytes, &docIDStr); err == nil {
-		slog.Debug("Response is a string",
-			"id", docIDStr,
-			"title", title,
-			"filename", fileName)
-
-		// Only create task info if linking is enabled
-		if settings.LinkFieldID > 0 {
-			// Create task info
-			taskInfo := TaskInfo{
-				TaskID:    docIDStr,
-				Title:     title,
-				FileName:  fileName,
-				NoteTitle: note.Title,
-				Status:    "PENDING",
-				DateCreated: time.Now().Format(time.RFC3339),
-			}
-
-			// Add task to tracker
-			if err := e.taskTracker.AddTask(taskInfo); err != nil {
-				slog.Error("failed to save task info", "error", err)
-				return 0, fmt.Errorf("failed to save task info: %v", err)
-			}
-		}
-
-		// Return 0 as document ID since we'll get it later
-		return 0, nil
-	}
-
-	// If not a string, try to unmarshal as a map
-	var docDetails map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &docDetails); err != nil {
-		failedNoteChannel <- note
-		slog.Error("error decoding document details", "error", err)
-		return 0, fmt.Errorf("error decoding document details: %v", err)
-	}
-
-	if id, ok := docDetails["id"].(float64); ok {
-		slog.Debug("Found document ID in response",
-			"id", id,
-			"title", title)
-		e.Uploads.Add(1)
-		return int(id), nil
-	}
-
-	failedNoteChannel <- note
-	slog.Error("no document ID found in response",
-		"response", docDetails,
-		"title", title)
-	return 0, fmt.Errorf("no document ID found in response")
-}
-
 // convertToMarkdown converts Evernote HTML content to markdown
 func convertToMarkdown(content string) string {
 	// Remove XML/DTD declarations and Evernote specific tags
@@ -693,7 +434,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					note.Tags = noteTags
 
 					// Upload the markdown content as a new document
-					id, err := e.uploadFileToPaperless(documentTitle, mdFileName, "text/markdown", []byte(mdContent), note, url, failedNoteChannel)
+					id, err := paperless.UploadFile(e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), note, url, e.taskTracker, failedNoteChannel)
 					if err != nil {
 						slog.Error("failed to upload markdown content", "error", err)
 					} else {
@@ -959,16 +700,11 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 							continue
 						}
 
-						id, err := e.uploadFileToPaperless(
-							note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt,
-							uploadFileName,
-							uploadMimeType,
-							uploadData,
-							note,
-							url,
-							failedNoteChannel)
+						id, err := paperless.UploadFile(e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 						if err != nil {
 							slog.Error("failed to upload extracted file", "error", err)
+						} else {
+							slog.Info("uploaded note content as PDF", "document_id", id)
 						}
 						// Add file to cleanup list if it's in a temporary directory
 						if extractDir == os.TempDir() {
@@ -1425,7 +1161,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					continue
 				}
 
-				id, err := e.uploadFileToPaperless(documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, failedNoteChannel)
+				id, err := paperless.UploadFile(e.client, documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 				if err != nil {
 					failedNoteChannel <- note
 					slog.Error("failed to upload file", "error", err)

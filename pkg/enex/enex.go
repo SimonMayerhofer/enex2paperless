@@ -69,3 +69,18 @@ type ResourceAttributes struct {
 	Attachment      bool    `xml:"attachment,omitempty"`
 	ApplicationData string  `xml:"application-data,omitempty"`
 }
+
+// GetTitle returns the note's title
+func (n Note) GetTitle() string {
+	return n.Title
+}
+
+// GetCreated returns the note's created date
+func (n Note) GetCreated() string {
+	return n.Created
+}
+
+// GetTags returns the note's tags
+func (n Note) GetTags() []string {
+	return n.Tags
+}
