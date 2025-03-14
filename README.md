@@ -39,7 +39,7 @@ Flags:
   -h, --help                     help for enex2paperless
   -l, --link int                 Custom field ID for document linking
   -n, --nocolor                  Disable colored output
-      --noname string            Folder for saving files with no original filename
+      --noname string            Folder to save files with no original filename
   -o, --outputfolder string      Output attachements to this folder, NOT paperless.
   -t, --tags strings             Additional tags to add to all documents
   -T, --use-filename-tag         Add the ENEX filename as tag to all documents
@@ -87,7 +87,7 @@ ConcurrentWorkers: 1        # Number of concurrent workers
 CorrespondentTagPrefix: ""  # Prefix for tags to be used as correspondents
 ExcludedOutputFolder: ""    # Folder to save excluded files
 LinkFieldID: 0              # Custom field ID for document linking
-NoNameFolder: ""            # Folder for saving files with no original filename
+NoNameFolder: ""            # Folder to save files with no original filename
 OutputFolder: ""            # Output to folder instead of Paperless
 TitlePrefix: false          # Whether to prefix filenames with note titles
 Unzip: false                # Whether to unzip .zip files found in notes
