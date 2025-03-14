@@ -301,6 +301,36 @@ func (e *EnexFile) convertIWorkFileToPDF(filePath string, baseFileName string, m
 	return pdfMimeType, newFilePath, true, nil
 }
 
+// decodeBase64ResourceData handles the decoding of base64-encoded resource data
+// including padding, cleaning, validation, and decoding
+func (e *EnexFile) decodeBase64ResourceData(rawData string) ([]byte, error) {
+	// Add padding if necessary
+	data := rawData
+	padding := len(data) % 4
+	if padding > 0 {
+		slog.Debug("adding padding", "padding", padding)
+		data += strings.Repeat("=", 4-padding)
+	}
+
+	// Remove newlines and spaces from data
+	data = strings.ReplaceAll(data, "\n", "")
+	data = strings.ReplaceAll(data, " ", "")
+
+	// Validate that data is valid base64
+	validBase64 := regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
+	if !validBase64.MatchString(data) {
+		return nil, fmt.Errorf("data is not valid base64")
+	}
+
+	// Decode the base64 data
+	decodedData, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding resource data: %v", err)
+	}
+
+	return decodedData, nil
+}
+
 // SaveResourceAsFile saves a resource (attachment) from a note to the filesystem
 // Returns the path to the saved file and any error that occurred
 func (e *EnexFile) SaveResourceAsFile(outputFolder string, note Note, resource Resource, decodedData []byte) (string, error) {
@@ -615,6 +645,13 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					slog.String("file", resource.ResourceAttributes.FileName),
 				)
 
+				// Decode the base64 Resource.Data
+				decodedData, err := e.decodeBase64ResourceData(resource.Data)
+				if err != nil {
+					slog.Error(err.Error())
+					continue
+				}
+
 				// Check if this is an iWork file by filename
 				filenameLower := strings.ToLower(resource.ResourceAttributes.FileName)
 				isAppleFile := strings.HasSuffix(filenameLower, ".pages") ||
@@ -638,6 +675,32 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					continue
 				}
 
+				// Check if file has no name and should be saved to noname folder
+				if resource.ResourceAttributes.FileName == "" && settings.NoNameFolder != "" {
+					// Still need to set a filename
+					resource.ResourceAttributes.FileName = note.Title
+
+					nonameFolder := settings.NoNameFolder
+
+					// Ensure the noname directory exists
+					if err := e.Fs.MkdirAll(nonameFolder, 0755); err != nil {
+						slog.Error("failed to create noname directory", "error", err)
+					} else {
+						slog.Info("saving file with no original filename to noname folder",
+							"title", note.Title,
+							"folder", nonameFolder)
+
+						// Save to the noname folder and continue to next resource
+						_, err := e.SaveResourceAsFile(nonameFolder, note, resource, decodedData)
+						if err != nil {
+							failedNoteChannel <- note
+							slog.Error("failed to save resource file to noname folder", "error", err)
+							break
+						}
+						continue
+					}
+				}
+
 				// only process wanted file types
 				isAllowed, err := helpers.IsAllowedFileType(resource.Mime, resource.ResourceAttributes.FileName)
 				if err != nil {
@@ -655,32 +718,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 							"filetype", resource.Mime,
 							"folder", settings.ExcludedOutputFolder)
 
-						// add padding if necessary
-						data := resource.Data
-						padding := len(data) % 4
-						if padding > 0 {
-							slog.Debug("adding padding", "padding", padding)
-							data += strings.Repeat("=", 4-padding)
-						}
-
-						// Remove newlines and spaces from Resource.Data
-						data = strings.ReplaceAll(resource.Data, "\n", "")
-						data = strings.ReplaceAll(data, " ", "")
-
-						// Validate that Resource.Data is valid base64
-						validBase64 := regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
-						if !validBase64.MatchString(data) {
-							slog.Error("data is not valid base64")
-							continue
-						}
-
-						// Decode the base64 Resource.Data
-						decodedData, err := base64.StdEncoding.DecodeString(data)
-						if err != nil {
-							slog.Error("error decoding resource data for excluded file", "error", err)
-							continue
-						}
-
 						// Make sure the excluded output folder exists
 						if err := e.Fs.MkdirAll(settings.ExcludedOutputFolder, 0755); err != nil {
 							slog.Error("failed to create excluded output directory", "error", err)
@@ -696,33 +733,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					}
 
 					continue
-				}
-
-				// add padding if necessary
-				data := resource.Data
-				padding := len(data) % 4
-				if padding > 0 {
-					slog.Debug("adding padding", "padding", padding)
-					data += strings.Repeat("=", 4-padding)
-				}
-
-				// Remove newlines and spaces from Resource.Data
-				data = strings.ReplaceAll(resource.Data, "\n", "")
-				data = strings.ReplaceAll(data, " ", "")
-
-				// Validate that Resource.Data is valid base64
-				validBase64 := regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
-				if !validBase64.MatchString(data) {
-					slog.Error("data is not valid base64")
-					continue
-				}
-
-				// Decode the base64 Resource.Data
-				decodedData, err := base64.StdEncoding.DecodeString(data)
-				if err != nil {
-					failedNoteChannel <- note
-					slog.Error("error decoding resource data", "error", err)
-					break
 				}
 
 				// Handle zip files first, regardless of output folder setting
@@ -886,29 +896,9 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					continue // skip to next resource
 				}
 
-				// Upload the file to Paperless
-				if resource.ResourceAttributes.FileName == "" && settings.NoNameFolder != "" {
+				if resource.ResourceAttributes.FileName == "" {
 					// Still need to set a filename
 					resource.ResourceAttributes.FileName = note.Title
-
-					nonameFolder := settings.NoNameFolder
-
-					// Ensure the noname directory exists
-					if err := e.Fs.MkdirAll(nonameFolder, 0755); err != nil {
-						slog.Error("failed to create noname directory", "error", err)
-					} else {
-						slog.Info("saving file with no original filename to noname folder",
-							"title", note.Title,
-							"folder", nonameFolder)
-
-						// Save to the noname folder and continue to next resource
-						_, err := e.SaveResourceAsFile(nonameFolder, note, resource, decodedData)
-						if err != nil {
-							failedNoteChannel <- note
-							slog.Error("failed to save resource file to noname folder", "error", err)
-							break
-						}
-					}
 				}
 
 				// if outputFolder is set, output to disk and continue
@@ -1052,16 +1042,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						failedNoteChannel <- note
 						slog.Error("couldn't write fields", "error", err)
 						break
-					}
-				}
-
-				// In edge cases, the filename might be empty.
-				if resource.ResourceAttributes.FileName == "" {
-					// if noname folder is set, skip this resource otherwise use the note title
-					if settings.NoNameFolder == "" {
-						resource.ResourceAttributes.FileName = note.Title
-					} else {
-						continue
 					}
 				}
 
