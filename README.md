@@ -19,6 +19,7 @@ This tool was initially created by [kevinzehnder](https://github.com/kevinzehnde
 - ✅ **Add suffix for filename collisions** using output to folder option. E.g. scan-1.pdf, scan-2.pdf, etc.
 - ✅ **Fix file extensions for exported files** in case the evernote exported files have the wrong or missing extensions.
 - ✅ **Add option to exclude specific file types** when using the "any" option in FileTypes.
+- ✅ **Save excluded files** to separate folder.
 
 Planned features:
 - ⚪ Save files from notes witch had errors to folder
@@ -32,6 +33,7 @@ Usage:
 Flags:
   -c, --concurrent int           Number of concurrent consumers (default 1)
       --convert-apple-pdf        Convert Apple iWork files to PDF
+  -e, --excluded-outputfolder    Folder to save excluded files
   -m, --convert-markdown         Convert note content to markdown format
       --correspondent-tag-prefix Prefix for tags to be used as correspondents
   -h, --help                     help for enex2paperless
@@ -83,6 +85,7 @@ ConvertMarkdown: false      # Whether to convert note content to markdown
 ConvertAppleToPDF: false    # Whether to convert Apple iWork files to PDF
 ConcurrentWorkers: 1        # Number of concurrent workers
 CorrespondentTagPrefix: ""  # Prefix for tags to be used as correspondents
+ExcludedOutputFolder: ""    # Folder to save excluded files
 LinkFieldID: 0              # Custom field ID for document linking
 NoNameFolder: ""            # Folder for saving files with no original filename
 OutputFolder: ""            # Output to folder instead of Paperless
@@ -95,19 +98,20 @@ UseFilenameAsTag: false     # Whether to use the ENEX filename as a tag
 
 The following table shows the mapping between config.yaml settings and command-line arguments:
 
-| config.yaml setting    | Command-line argument      | Description |
-|------------------------|----------------------------|-------------|
-| AdditionalTags         | -t, --tags                 | Additional tags to add to all documents |
-| ConvertMarkdown        | -m, --convert-markdown     | Convert note content to markdown |
-| ConvertAppleToPDF      | --convert-apple-pdf        | Convert Apple iWork files to PDF |
-| ConcurrentWorkers      | -c, --concurrent           | Number of concurrent workers |
-| CorrespondentTagPrefix | --correspondent-tag-prefix | Prefix for tags to be used as correspondents |
-| LinkFieldID            | -l, --link                 | Custom field ID for document linking |
-| NoNameFolder           | --noname                   | Folder for saving files with no original filename |
-| OutputFolder           | -o, --outputfolder         | Output attachements to this folder, NOT paperless |
-| TitlePrefix            | --titleprefix              | Prefix filenames with note titles |
-| Unzip                  | -u, --unzip                | Unzip .zip files found in notes |
-| UseFilenameAsTag       | -T, --use-filename-tag     | Add the ENEX filename as tag to all documents |
+| config.yaml setting    | Command-line argument       | Description |
+|------------------------|-----------------------------|-------------|
+| AdditionalTags         | -t, --tags                  | Additional tags to add to all documents |
+| ConvertMarkdown        | -m, --convert-markdown      | Convert note content to markdown |
+| ConvertAppleToPDF      | --convert-apple-pdf         | Convert Apple iWork files to PDF |
+| ConcurrentWorkers      | -c, --concurrent            | Number of concurrent workers |
+| CorrespondentTagPrefix | --correspondent-tag-prefix  | Prefix for tags to be used as correspondents |
+| ExcludedOutputFolder   | -e, --excluded-outputfolder | Folder to save excluded files |
+| LinkFieldID            | -l, --link                  | Custom field ID for document linking |
+| NoNameFolder           | --noname                    | Folder to save files with no original filename |
+| OutputFolder           | -o, --outputfolder          | Output attachements to this folder, NOT paperless |
+| TitlePrefix            | --titleprefix               | Prefix filenames with note titles |
+| Unzip                  | -u, --unzip                 | Unzip .zip files found in notes |
+| UseFilenameAsTag       | -T, --use-filename-tag      | Add the ENEX filename as tag to all documents |
 
 ## Explanation of Configuration Options
 
@@ -326,6 +330,29 @@ When this setting is configured:
 2. The note title will still be used as the filename, but they'll be stored separately
 
 If not specified, files with no name will be saved in the regular output folder or will be uploaded to Paperless.
+
+### Excluded Files Output Folder
+
+When processing files, some attachments might be excluded based on your `FileTypes` and `ExcludeFileTypes` settings. By default, these files are simply skipped. However, you can save these excluded files to a dedicated folder using the `ExcludedOutputFolder` setting.
+
+You can set this in your `config.yaml` file:
+
+```yaml
+ExcludedOutputFolder: "excluded"
+```
+
+Or use the command-line flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex --excluded-outputfolder excluded
+```
+
+This is particularly useful for:
+1. Reviewing what files were excluded during processing
+2. Ensuring no important files are missed
+3. Finding files you might want to include in future runs
+
+This feature works alongside both the regular Paperless upload mode and the `OutputFolder` option.
 
 ### Apple iWork Files Conversion
 

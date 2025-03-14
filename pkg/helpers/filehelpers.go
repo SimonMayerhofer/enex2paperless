@@ -522,3 +522,29 @@ func SetFileTimestamps(fs afero.Fs, filePath string, fileTime time.Time, fileDes
 
 	return false
 }
+
+// EnsureUniqueFilename creates a unique filename if the original filename already exists
+// Returns the original filename if it doesn't exist, or a new filename with a counter appended
+func EnsureUniqueFilename(fs afero.Fs, filePath string) string {
+	// Check if file exists
+	exists, err := afero.Exists(fs, filePath)
+	if err != nil || !exists {
+		// Return original path if file doesn't exist or there was an error checking
+		return filePath
+	}
+
+	// Generate a new filename with a counter
+	ext := filepath.Ext(filePath)
+	baseFilePath := strings.TrimSuffix(filePath, ext)
+	counter := 1
+
+	for {
+		newPath := fmt.Sprintf("%s-%d%s", baseFilePath, counter, ext)
+		exists, err := afero.Exists(fs, newPath)
+		if err != nil || !exists {
+			// Return new path if it doesn't exist or there was an error checking
+			return newPath
+		}
+		counter++
+	}
+}

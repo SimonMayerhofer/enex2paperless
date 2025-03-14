@@ -28,6 +28,7 @@ type Config struct {
 	FileTypes              []string `validate:"required"`
 	ExcludeFileTypes       []string // File types to exclude when using "any" in FileTypes
 	OutputFolder           string
+	ExcludedOutputFolder   string // Folder to store excluded files that don't match allowed file types
 	NoNameFolder           string // Folder to store files with no filenames
 	AdditionalTags         []string
 	Unzip                  bool
@@ -154,4 +155,9 @@ func SetExcludeFileTypes(excludeFileTypes []string) {
 // SetNoNameFolder sets the folder path for files with no original filename
 func SetNoNameFolder(folder string) {
 	settings.NoNameFolder = folder
+}
+
+// SetExcludedOutputFolder sets the folder for storing excluded files.
+func SetExcludedOutputFolder(folder string) {
+	settings.ExcludedOutputFolder = folder
 }

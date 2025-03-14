@@ -106,7 +106,6 @@ func main() {
 				config.SetAdditionalTags(tags)
 			}
 
-
 			// set unzip option
 			unzip, err := cmd.Flags().GetBool("unzip")
 			if err != nil {
@@ -195,6 +194,16 @@ func main() {
 				config.SetNoNameFolder(noname)
 			}
 
+			// set excluded output folder
+			excludedOutput, err := cmd.Flags().GetString("excluded-outputfolder")
+			if err != nil {
+				fmt.Println("Error retrieving excluded-outputfolder flag:", err)
+				os.Exit(1)
+			}
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("excluded-outputfolder") {
+				config.SetExcludedOutputFolder(excludedOutput)
+			}
 		},
 
 		// run main function
@@ -240,6 +249,9 @@ func main() {
 	var nonameFolder string
 	rootCmd.PersistentFlags().StringVar(&nonameFolder, "noname", "", "Folder for saving files with no original filename")
 
+	var excludedOutputFolder string
+	rootCmd.PersistentFlags().StringVarP(&excludedOutputFolder, "excluded-outputfolder", "e", "", "Folder for saving excluded files that don't match allowed file types")
+
 	// run root command
 	err := rootCmd.Execute()
 	if err != nil {
@@ -254,6 +266,10 @@ func importENEX(cmd *cobra.Command, args []string) {
 
 	if settings.OutputFolder != "" {
 		slog.Info(fmt.Sprintf("Output to local storage is enabled. Target is: %v", settings.OutputFolder))
+	}
+
+	if settings.ExcludedOutputFolder != "" {
+		slog.Info(fmt.Sprintf("Excluded files output folder is enabled. Target is: %v", settings.ExcludedOutputFolder))
 	}
 
 	// Check if we need to add the filename as a tag

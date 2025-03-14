@@ -647,6 +647,54 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 
 				if !isAllowed {
 					slog.Debug("skipping unwanted file type", "filename", resource.ResourceAttributes.FileName, "filetype", resource.Mime)
+
+					// Check if we should save excluded files
+					if settings.ExcludedOutputFolder != "" {
+						slog.Info("saving excluded file to excluded output folder",
+							"filename", resource.ResourceAttributes.FileName,
+							"filetype", resource.Mime,
+							"folder", settings.ExcludedOutputFolder)
+
+						// add padding if necessary
+						data := resource.Data
+						padding := len(data) % 4
+						if padding > 0 {
+							slog.Debug("adding padding", "padding", padding)
+							data += strings.Repeat("=", 4-padding)
+						}
+
+						// Remove newlines and spaces from Resource.Data
+						data = strings.ReplaceAll(resource.Data, "\n", "")
+						data = strings.ReplaceAll(data, " ", "")
+
+						// Validate that Resource.Data is valid base64
+						validBase64 := regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
+						if !validBase64.MatchString(data) {
+							slog.Error("data is not valid base64")
+							continue
+						}
+
+						// Decode the base64 Resource.Data
+						decodedData, err := base64.StdEncoding.DecodeString(data)
+						if err != nil {
+							slog.Error("error decoding resource data for excluded file", "error", err)
+							continue
+						}
+
+						// Make sure the excluded output folder exists
+						if err := e.Fs.MkdirAll(settings.ExcludedOutputFolder, 0755); err != nil {
+							slog.Error("failed to create excluded output directory", "error", err)
+							continue
+						}
+
+						// Save the excluded file
+						_, err = e.SaveResourceAsFile(settings.ExcludedOutputFolder, note, resource, decodedData)
+						if err != nil {
+							slog.Error("failed to save excluded resource file", "error", err)
+							continue
+						}
+					}
+
 					continue
 				}
 
@@ -723,6 +771,48 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 
 						if !isAllowed {
 							slog.Debug("skipping unwanted extracted file type", "filename", file.Name, "filetype", file.MimeType)
+
+							// Check if we should save excluded files
+							if settings.ExcludedOutputFolder != "" {
+								slog.Info("saving excluded extracted file to excluded output folder",
+									"filename", file.Name,
+									"filetype", file.MimeType,
+									"folder", settings.ExcludedOutputFolder)
+
+								// Make sure the excluded output folder exists
+								if err := e.Fs.MkdirAll(settings.ExcludedOutputFolder, 0755); err != nil {
+									slog.Error("failed to create excluded output directory", "error", err)
+									continue
+								}
+
+								// Create a filename that includes zip context
+								zipInfo := ""
+								if file.ZipFileName != "" {
+									zipFileNameWithoutExt := strings.TrimSuffix(file.ZipFileName, filepath.Ext(file.ZipFileName))
+									zipInfo = zipFileNameWithoutExt + " - "
+								}
+
+								// Create full path with context
+								excludedFileName := filepath.Join(settings.ExcludedOutputFolder, zipInfo+filepath.Base(file.Name))
+
+								// Handle filename conflicts
+								excludedFileName = helpers.EnsureUniqueFilename(e.Fs, excludedFileName)
+
+								// Write the file
+								if err := afero.WriteFile(e.Fs, excludedFileName, file.Data, 0644); err != nil {
+									slog.Error("failed to save excluded extracted file", "error", err)
+									continue
+								}
+
+								// Set the timestamp if available
+								if !file.FileTime.IsZero() {
+									helpers.SetFileTimestamps(e.Fs, excludedFileName, file.FileTime, "excluded extracted file")
+								}
+
+								slog.Info("saved excluded extracted file", "path", excludedFileName)
+								e.Uploads.Add(1)
+							}
+
 							continue
 						}
 
