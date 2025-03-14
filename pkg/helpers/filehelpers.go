@@ -388,6 +388,21 @@ func IsAllowedFileType(mimeType string, filename string) (bool, error) {
 		}
 	}
 
+	// First check: Direct MIME type check
+	mimeTypeLower := strings.ToLower(mimeType)
+	for _, fileType := range settings.FileTypes {
+		fileTypeLower := strings.ToLower(fileType)
+		// Special case for txt files
+		if fileTypeLower == "txt" && strings.Contains(mimeTypeLower, "plain") {
+			return true, nil
+		}
+		// Check if the file type is contained in the MIME type
+		if strings.Contains(mimeTypeLower, fileTypeLower) {
+			return true, nil
+		}
+	}
+
+	// Second check: Extension-based check (existing logic)
 	// Extract the extension from the MIME type
 	extension, err := GetExtensionFromMimeType(mimeType)
 	if err != nil {
