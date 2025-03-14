@@ -796,6 +796,31 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					continue // skip to next resource
 				}
 
+				// Upload the file to Paperless
+				if resource.ResourceAttributes.FileName == "" && settings.NoNameFolder != "" {
+					// Still need to set a filename
+					resource.ResourceAttributes.FileName = note.Title
+
+					nonameFolder := settings.NoNameFolder
+
+					// Ensure the noname directory exists
+					if err := e.Fs.MkdirAll(nonameFolder, 0755); err != nil {
+						slog.Error("failed to create noname directory", "error", err)
+					} else {
+						slog.Info("saving file with no original filename to noname folder",
+							"title", note.Title,
+							"folder", nonameFolder)
+
+						// Save to the noname folder and continue to next resource
+						_, err := e.SaveResourceAsFile(nonameFolder, note, resource, decodedData)
+						if err != nil {
+							failedNoteChannel <- note
+							slog.Error("failed to save resource file to noname folder", "error", err)
+							break
+						}
+					}
+				}
+
 				// if outputFolder is set, output to disk and continue
 				if outputFolder != "" {
 					_, err := e.SaveResourceAsFile(outputFolder, note, resource, decodedData)
@@ -940,9 +965,14 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					}
 				}
 
-				// Upload the file to Paperless
+				// In edge cases, the filename might be empty.
 				if resource.ResourceAttributes.FileName == "" {
-					resource.ResourceAttributes.FileName = note.Title
+					// if noname folder is set, skip this resource otherwise use the note title
+					if settings.NoNameFolder == "" {
+						resource.ResourceAttributes.FileName = note.Title
+					} else {
+						continue
+					}
 				}
 
 				// Initialize upload variables

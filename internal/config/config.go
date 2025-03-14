@@ -21,21 +21,22 @@ var (
 )
 
 type Config struct {
-	PaperlessAPI      string   `validate:"required,http_url"`
-	Username          string   `validate:"required_with=Password"`
-	Password          string   `validate:"required_with=Username"`
-	Token             string   `validate:"required_without=Password"`
-	FileTypes         []string `validate:"required"`
-	ExcludeFileTypes  []string // File types to exclude when using "any" in FileTypes
-	OutputFolder      string
-	AdditionalTags    []string
-	Unzip             bool
-	LinkFieldID       int      // Custom field ID for document linking
-	TitlePrefix       bool     // Whether to prefix filenames with note titles
-	ConvertMarkdown   bool     // Whether to convert note content to markdown
-	ConvertAppleToPDF bool     // Whether to convert Apple iWork files to PDF
-	ConcurrentWorkers int      // Number of concurrent workers
-	UseFilenameAsTag  bool     // Whether to use the ENEX filename as a tag
+	PaperlessAPI           string   `validate:"required,http_url"`
+	Username               string   `validate:"required_with=Password"`
+	Password               string   `validate:"required_with=Username"`
+	Token                  string   `validate:"required_without=Password"`
+	FileTypes              []string `validate:"required"`
+	ExcludeFileTypes       []string // File types to exclude when using "any" in FileTypes
+	OutputFolder           string
+	NoNameFolder           string // Folder to store files with no filenames
+	AdditionalTags         []string
+	Unzip                  bool
+	LinkFieldID            int    // Custom field ID for document linking
+	TitlePrefix            bool   // Whether to prefix filenames with note titles
+	ConvertMarkdown        bool   // Whether to convert note content to markdown
+	ConvertAppleToPDF      bool   // Whether to convert Apple iWork files to PDF
+	ConcurrentWorkers      int    // Number of concurrent workers
+	UseFilenameAsTag       bool   // Whether to use the ENEX filename as a tag
 	CorrespondentTagPrefix string // Prefix for tags to be used as correspondents
 }
 
@@ -148,4 +149,9 @@ func SetCorrespondentTagPrefix(prefix string) {
 // SetExcludeFileTypes sets the file types to exclude when using "any" in FileTypes
 func SetExcludeFileTypes(excludeFileTypes []string) {
 	settings.ExcludeFileTypes = excludeFileTypes
+}
+
+// SetNoNameFolder sets the folder path for files with no original filename
+func SetNoNameFolder(folder string) {
+	settings.NoNameFolder = folder
 }

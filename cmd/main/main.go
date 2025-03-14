@@ -183,6 +183,18 @@ func main() {
 			if cmd.Flags().Changed("correspondent-tag-prefix") {
 				config.SetCorrespondentTagPrefix(correspondentTagPrefix)
 			}
+
+			// set noname folder
+			noname, err := cmd.Flags().GetString("noname")
+			if err != nil {
+				fmt.Println("Error retrieving noname flag:", err)
+				os.Exit(1)
+			}
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("noname") {
+				config.SetNoNameFolder(noname)
+			}
+
 		},
 
 		// run main function
@@ -224,6 +236,9 @@ func main() {
 
 	var correspondentTagPrefix string
 	rootCmd.PersistentFlags().StringVar(&correspondentTagPrefix, "correspondent-tag-prefix", "", "Prefix for tags to be used as correspondents (e.g. '@')")
+
+	var nonameFolder string
+	rootCmd.PersistentFlags().StringVar(&nonameFolder, "noname", "", "Folder for saving files with no original filename")
 
 	// run root command
 	err := rootCmd.Execute()

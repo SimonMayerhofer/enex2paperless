@@ -37,6 +37,7 @@ Flags:
   -h, --help                     help for enex2paperless
   -l, --link int                 Custom field ID for document linking
   -n, --nocolor                  Disable colored output
+      --noname string            Folder for saving files with no original filename
   -o, --outputfolder string      Output attachements to this folder, NOT paperless.
   -t, --tags strings             Additional tags to add to all documents
   -T, --use-filename-tag         Add the ENEX filename as tag to all documents
@@ -83,6 +84,7 @@ ConvertAppleToPDF: false    # Whether to convert Apple iWork files to PDF
 ConcurrentWorkers: 1        # Number of concurrent workers
 CorrespondentTagPrefix: ""  # Prefix for tags to be used as correspondents
 LinkFieldID: 0              # Custom field ID for document linking
+NoNameFolder: ""            # Folder for saving files with no original filename
 OutputFolder: ""            # Output to folder instead of Paperless
 TitlePrefix: false          # Whether to prefix filenames with note titles
 Unzip: false                # Whether to unzip .zip files found in notes
@@ -101,6 +103,7 @@ The following table shows the mapping between config.yaml settings and command-l
 | ConcurrentWorkers      | -c, --concurrent           | Number of concurrent workers |
 | CorrespondentTagPrefix | --correspondent-tag-prefix | Prefix for tags to be used as correspondents |
 | LinkFieldID            | -l, --link                 | Custom field ID for document linking |
+| NoNameFolder           | --noname                   | Folder for saving files with no original filename |
 | OutputFolder           | -o, --outputfolder         | Output attachements to this folder, NOT paperless |
 | TitlePrefix            | --titleprefix              | Prefix filenames with note titles |
 | Unzip                  | -u, --unzip                | Unzip .zip files found in notes |
@@ -297,6 +300,32 @@ ConvertMarkdown: true
 ```
 
 Files will be tagged with "markdown" for easy identification. Only notes with text in the content will be uploaded as markdown files.
+
+### NoName Folder for Files Without Filenames
+
+Some attachments in Evernote notes might not have a filename set. By default, the tool uses the note title as the filename when this happens. You can optionally specify a separate folder to store these files using the `NoNameFolder` setting.
+
+You can set this in your `config.yaml` file:
+
+```yaml
+NoNameFolder: "noname"
+```
+
+Or use the command-line flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex --noname noname
+```
+
+If you saved webpages with the Evernote webclipper or forwarded your mails you might have a lot of (unnamed) images which you don't want to have in Evernote. These will be saved in the NoNameFolder instead of being uploaded to Paperless.
+
+The idea is to find those files in a first run when using the outputfolder option. If these are actual files which you want to keep rename the file in the Evernote Note, save the enex again and upload it to paperless.
+
+When this setting is configured:
+1. Files without original filenames will be saved to this folder instead of being uploaded to Paperless.
+2. The note title will still be used as the filename, but they'll be stored separately
+
+If not specified, files with no name will be saved in the regular output folder or will be uploaded to Paperless.
 
 ### Apple iWork Files Conversion
 
