@@ -80,13 +80,13 @@ func UnzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 		mimeType := GetMimeType(file.Name)
 
 		// Check if this file type should be processed
-		isWantedFileType, err := CheckFileType(mimeType, file.Name)
+		isAllowed, err := IsAllowedFileType(mimeType, file.Name)
 		if err != nil {
 			slog.Error("error when handling MIME type", "error", err, "filename", file.Name, "mimetype", mimeType)
 			continue
 		}
 
-		if !isWantedFileType {
+		if !isAllowed {
 			slog.Debug("skipping unwanted extracted file type", "filename", file.Name, "filetype", mimeType)
 			continue
 		}
@@ -317,7 +317,7 @@ func GetExtensionFromMimeType(mimeType string) (string, error) {
 	return "", nil
 }
 
-func CheckFileType(mimeType string, filename string) (bool, error) {
+func IsAllowedFileType(mimeType string, filename string) (bool, error) {
 	// Get configuration and check for errors
 	settings, err := config.GetConfig()
 	if err != nil {
@@ -360,70 +360,6 @@ func CheckFileType(mimeType string, filename string) (bool, error) {
 				}
 			}
 			return true, nil
-		}
-	}
-
-	// Check if this is an iWork file by filename
-	filenameLower := strings.ToLower(filename)
-	isAppleFile := strings.HasSuffix(filenameLower, ".pages") ||
-		strings.HasSuffix(filenameLower, ".numbers") ||
-		strings.HasSuffix(filenameLower, ".key") ||
-		strings.HasSuffix(filenameLower, ".pages.zip") ||
-		strings.HasSuffix(filenameLower, ".numbers.zip") ||
-		strings.HasSuffix(filenameLower, ".key.zip")
-
-	// Also check by MIME type
-	mimeTypeLower := strings.ToLower(mimeType)
-	if strings.Contains(mimeTypeLower, "pages") ||
-		strings.Contains(mimeTypeLower, "numbers") ||
-		strings.Contains(mimeTypeLower, "keynote") ||
-		strings.Contains(mimeTypeLower, "iwork") {
-		isAppleFile = true
-	}
-
-	// Check known Apple MIME types
-	appleFileTypes := []string{
-		"application/vnd.apple.pages",
-		"application/vnd.apple.numbers",
-		"application/vnd.apple.keynote",
-		"application/x-iwork-pages-sffpages",
-		"application/x-iwork-keynote-sffnumbers",
-		"application/x-iwork-keynote-sffkey",
-	}
-
-	for _, appleType := range appleFileTypes {
-		if mimeType == appleType {
-			isAppleFile = true
-			break
-		}
-	}
-
-	// If this is an iWork file and ConvertAppleToPDF is not enabled, skip it
-	if isAppleFile {
-		slog.Debug("detected iWork file", "filename", filename, "mime_type", mimeType)
-		if !settings.ConvertAppleToPDF {
-			slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled", "filename", filename, "mime_type", mimeType)
-			return false, nil
-		} else {
-			slog.Debug("allowing iWork file for PDF conversion", "filename", filename, "mime_type", mimeType)
-			return true, nil
-		}
-	}
-
-	// For zip files, check if they might be iWork files
-	if mimeType == "application/zip" || mimeType == "application/octet-stream" {
-		// If the filename suggests it's an iWork file, handle it as above
-		if strings.HasSuffix(filenameLower, ".pages") ||
-			strings.HasSuffix(filenameLower, ".numbers") ||
-			strings.HasSuffix(filenameLower, ".key") {
-			slog.Debug("detected iWork file with zip MIME type", "filename", filename, "mime_type", mimeType)
-			if !settings.ConvertAppleToPDF {
-				slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled", "filename", filename, "mime_type", mimeType)
-				return false, nil
-			} else {
-				slog.Debug("allowing iWork file for PDF conversion", "filename", filename, "mime_type", mimeType)
-				return true, nil
-			}
 		}
 	}
 
@@ -532,4 +468,32 @@ func EnsureCorrectExtension(filename string, mimeType string) string {
 	// Extensions match or we're keeping the existing one, but ensure it's lowercase
 	basename := strings.TrimSuffix(filename, filepath.Ext(filename))
 	return basename + "." + currentExt
+}
+
+// SetFileTimestamps sets the access and modification times for a file
+// Works with afero filesystem abstraction and handles logging
+func SetFileTimestamps(fs afero.Fs, filePath string, fileTime time.Time, fileDesc string) bool {
+	if fileTime.IsZero() {
+		slog.Debug("skipping timestamp setting - no valid time provided", "file", filePath)
+		return false
+	}
+
+	// Only attempt to set timestamps if we're using the OS filesystem
+	if _, ok := fs.(*afero.OsFs); ok {
+		if err := os.Chtimes(filePath, fileTime, fileTime); err != nil {
+			slog.Error(fmt.Sprintf("failed to set %s timestamps", fileDesc),
+				"error", err,
+				"file", filePath)
+			return false
+		} else {
+			slog.Debug(fmt.Sprintf("set %s timestamps", fileDesc),
+				"file", filePath,
+				"time", fileTime)
+			return true
+		}
+	} else {
+		slog.Debug("skipping timestamp setting - not using OS filesystem", "file", filePath)
+	}
+
+	return false
 }

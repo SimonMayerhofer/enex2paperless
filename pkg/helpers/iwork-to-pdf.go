@@ -21,7 +21,7 @@ var appleAppMutex sync.Mutex
 
 // convertAppleFileToPDF converts Apple iWork (Pages, Numbers, and Keynote) files to PDF format
 // It uses AppleScript to automate the conversion process
-func ConvertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCreatedDate string) ([]byte, string, error) {
+func ConvertIWorkToPDF(fs afero.Fs, filePath string, mimeType string, noteCreatedDate string) ([]byte, string, error) {
 	// Acquire the mutex to ensure only one Apple application is running at a time
 	slog.Debug("acquiring lock for Apple application", "file", filePath)
 	appleAppMutex.Lock()
@@ -168,56 +168,85 @@ func ConvertAppleFileToPDF(fs afero.Fs, filePath string, mimeType string, noteCr
 	return pdfData, "application/pdf", nil
 }
 
-// shouldConvertToPDF checks if the file should be converted to PDF
-// Currently supports Apple iWork (Pages, Numbers, and Keynote) files
-func ShouldConvertToPDF(mimeType string) bool {
-	// Get settings
+// IsIWorkFile checks if a file is an Apple iWork document
+// Identifies Pages, Numbers, and Keynote files by filename extension or MIME type
+func IsIWorkFile(mimeType string, filename string) bool {
+	slog.Debug("checking if file is an Apple iWork document",
+		"mime_type", mimeType,
+		"filename", filename)
+
+	// First check the filename if provided
+	if filename != "" {
+		filenameLower := strings.ToLower(filename)
+
+		// Check for iWork file extensions
+		if strings.HasSuffix(filenameLower, ".pages") ||
+			strings.HasSuffix(filenameLower, ".numbers") ||
+			strings.HasSuffix(filenameLower, ".key") ||
+			strings.HasSuffix(filenameLower, ".pages.zip") ||
+			strings.HasSuffix(filenameLower, ".numbers.zip") ||
+			strings.HasSuffix(filenameLower, ".key.zip") {
+			slog.Debug("file is an Apple iWork document (filename extension match)",
+				"filename", filename)
+			return true
+		}
+	}
+
+	// Now check the MIME type if provided
+	if mimeType != "" {
+		mimeTypeLower := strings.ToLower(mimeType)
+
+		// Check for exact MIME type matches
+		appleFormats := []string{
+			"application/vnd.apple.pages",
+			"application/vnd.apple.numbers",
+			"application/vnd.apple.keynote",
+			"application/x-iwork-pages-sffpages",
+			"application/x-iwork-numbers-sffnumbers",
+			"application/x-iwork-keynote-sffkey",
+		}
+
+		for _, format := range appleFormats {
+			if mimeType == format {
+				slog.Debug("file is an Apple iWork document (exact MIME type match)",
+					"mime_type", mimeType)
+				return true
+			}
+		}
+
+		// Check for substring matches in MIME type
+		if strings.Contains(mimeTypeLower, "pages") ||
+			strings.Contains(mimeTypeLower, "numbers") ||
+			strings.Contains(mimeTypeLower, "keynote") ||
+			strings.Contains(mimeTypeLower, "iwork") ||
+			strings.Contains(mimeTypeLower, "apple") {
+			slog.Debug("file is an Apple iWork document (MIME type substring match)",
+				"mime_type", mimeType)
+			return true
+		}
+	}
+
+	slog.Debug("file is not an Apple iWork document",
+		"mime_type", mimeType,
+		"filename", filename)
+	return false
+}
+
+// IsIWorkFileConvertible checks if a file is an Apple iWork document and if conversion is enabled
+// It combines the IsIWorkFile check with configuration settings
+func IsIWorkFileConvertible(mimeType string, filename string) bool {
+	// Check if conversion is enabled in config
 	settings, err := config.GetConfig()
 	if err != nil {
 		slog.Error("failed to get config", "error", err)
 		return false
 	}
 
-	// Check if conversion is enabled
 	if !settings.ConvertAppleToPDF {
 		slog.Debug("Apple iWork to PDF conversion is disabled in config")
 		return false
 	}
 
-	slog.Debug("checking if file should be converted to PDF", "mime_type", mimeType)
-
-	// Check if the MIME type is one of the known Apple formats
-	mimeTypeLower := strings.ToLower(mimeType)
-
-	// Check for exact MIME type matches
-	appleFormats := []string{
-		"application/vnd.apple.pages",
-		"application/vnd.apple.numbers",
-		"application/vnd.apple.keynote",
-		"application/x-iwork-pages-sffpages",
-		"application/x-iwork-keynote-sffnumbers",
-		"application/x-iwork-keynote-sffkey",
-	}
-
-	for _, format := range appleFormats {
-		if mimeType == format {
-			slog.Debug("file will be converted to PDF (exact MIME type match)", "mime_type", mimeType)
-			return true
-		}
-	}
-
-	// Check for substring matches
-	if strings.Contains(mimeTypeLower, "pages") ||
-		strings.Contains(mimeTypeLower, "numbers") ||
-		strings.Contains(mimeTypeLower, "keynote") ||
-		strings.Contains(mimeTypeLower, "iwork") {
-		slog.Debug("file will be converted to PDF (MIME type substring match)", "mime_type", mimeType)
-		return true
-	}
-
-	// Special case for zip files that might be Apple iWork files
-	// This should be handled by the caller checking the filename
-
-	slog.Debug("file will not be converted to PDF", "mime_type", mimeType)
-	return false
+	// If conversion is enabled, check if this is an iWork file
+	return IsIWorkFile(mimeType, filename)
 }

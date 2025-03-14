@@ -137,6 +137,393 @@ func convertToMarkdown(content string) string {
 	return markdown
 }
 
+// parseTimestamp parses Evernote timestamp format (20060102T150405Z)
+// If primaryTimestamp fails, it falls back to fallbackTimestamp
+// Returns the parsed time and a boolean indicating success
+func parseTimestamp(primaryTimestamp string, fallbackTimestamp string) (time.Time, bool) {
+	var fileTime time.Time
+	var err error
+
+	if primaryTimestamp != "" {
+		fileTime, err = time.Parse("20060102T150405Z", primaryTimestamp)
+		if err != nil {
+			slog.Debug("failed to parse primary timestamp, trying fallback",
+				"error", err,
+				"primary_timestamp", primaryTimestamp)
+
+			if fallbackTimestamp != "" {
+				fileTime, err = time.Parse("20060102T150405Z", fallbackTimestamp)
+				if err != nil {
+					slog.Error("failed to parse fallback timestamp",
+						"error", err,
+						"fallback_timestamp", fallbackTimestamp)
+					return time.Time{}, false
+				} else {
+					slog.Debug("using fallback timestamp",
+						"fallback_timestamp", fallbackTimestamp,
+						"time", fileTime)
+					return fileTime, true
+				}
+			} else {
+				return time.Time{}, false
+			}
+		} else {
+			slog.Debug("using primary timestamp",
+				"primary_timestamp", primaryTimestamp,
+				"time", fileTime)
+			return fileTime, true
+		}
+	} else if fallbackTimestamp != "" {
+		fileTime, err = time.Parse("20060102T150405Z", fallbackTimestamp)
+		if err != nil {
+			slog.Error("failed to parse fallback timestamp",
+				"error", err,
+				"fallback_timestamp", fallbackTimestamp)
+			return time.Time{}, false
+		} else {
+			slog.Debug("using fallback timestamp (no primary timestamp)",
+				"fallback_timestamp", fallbackTimestamp,
+				"time", fileTime)
+			return fileTime, true
+		}
+	}
+
+	return time.Time{}, false
+}
+
+// convertIWorkFileToPDF checks if a file is an Apple iWork file and converts it to PDF if needed
+// Parameters:
+// - filePath: The full path to the file on disk that needs to be converted
+// - baseFileName: The original filename (without path) used for logging purposes
+// - mimeType: The MIME type of the file
+// - noteCreated: The creation timestamp of the note in Evernote format (20060102T150405Z)
+// - resourceTimestamp: The timestamp of the resource in Evernote format (can be empty)
+// - outputFolder: Optional output folder; if provided and source is in a temp dir, the PDF will be copied there
+//
+// Returns:
+// - string: The MIME type, which will be "application/pdf" if conversion succeeded
+// - string: The new file path with .pdf extension if conversion succeeded
+// - bool: True if conversion was successful, false otherwise
+// - error: Any error that occurred during conversion
+func (e *EnexFile) convertIWorkFileToPDF(filePath string, baseFileName string, mimeType string, noteCreated string, resourceTimestamp string, outputFolder string) (string, string, bool, error) {
+	// Check if this is an Apple iWork file that should be converted to PDF
+	if !helpers.IsIWorkFileConvertible(mimeType, baseFileName) {
+		slog.Debug("file not eligible for PDF conversion",
+			"file", filePath,
+			"mime_type", mimeType,
+			"extension", filepath.Ext(filePath))
+		// Return original file info
+		return mimeType, filePath, false, nil
+	}
+
+	// Get timestamp for the file using the helper function
+	fileTime, _ := parseTimestamp(resourceTimestamp, noteCreated)
+
+	// Set timestamp for the original iWork file before conversion
+	helpers.SetFileTimestamps(e.Fs, filePath, fileTime, "original iWork file")
+
+	// Convert to PDF
+	slog.Info("converting Apple iWork file to PDF",
+		"file", filePath,
+		"mime_type", mimeType)
+	pdfData, pdfMimeType, err := helpers.ConvertIWorkToPDF(e.Fs, filePath, mimeType, noteCreated)
+	if err != nil {
+		slog.Error("failed to convert file to PDF",
+			"error", err,
+			"file", filePath)
+		// Return original file info
+		return mimeType, filePath, false, err
+	}
+
+	// Update the filename to reflect the PDF extension
+	ext := filepath.Ext(filePath)
+	newFilePath := strings.TrimSuffix(filePath, ext) + ".pdf"
+
+	// Write the PDF file directly to disk
+	if err := afero.WriteFile(e.Fs, newFilePath, pdfData, 0644); err != nil {
+		slog.Error("failed to write PDF file",
+			"error", err,
+			"file", newFilePath)
+		return mimeType, filePath, false, err
+	}
+
+	// Set timestamp for the PDF file
+	helpers.SetFileTimestamps(e.Fs, newFilePath, fileTime, "PDF file")
+
+	// If this is a temp file and we have an output folder, copy to the output folder
+	if outputFolder != "" && strings.Contains(newFilePath, os.TempDir()) {
+		pdfOutputName := filepath.Base(newFilePath)
+		pdfOutputPath := filepath.Join(outputFolder, pdfOutputName)
+
+		// Check for file existence and handle duplicates
+		finalOutputPath := pdfOutputPath
+		counter := 1
+
+		for {
+			exists, _ := afero.Exists(e.Fs, finalOutputPath)
+			if !exists {
+				break
+			}
+
+			// Files are different, try next suffix
+			ext := filepath.Ext(pdfOutputName)
+			nameWithoutExt := strings.TrimSuffix(pdfOutputName, ext)
+			finalOutputPath = filepath.Join(outputFolder, fmt.Sprintf("%s-%d%s", nameWithoutExt, counter, ext))
+			counter++
+		}
+
+		// Write the PDF to the output folder
+		if err := afero.WriteFile(e.Fs, finalOutputPath, pdfData, 0644); err != nil {
+			slog.Error("failed to save PDF to output folder",
+				"error", err,
+				"output_path", finalOutputPath)
+		} else {
+			// Set the same timestamp on the output file
+			helpers.SetFileTimestamps(e.Fs, finalOutputPath, fileTime, "output PDF file")
+
+			slog.Info("saved converted PDF file to output folder",
+				"original_file", baseFileName,
+				"pdf_file", filepath.Base(finalOutputPath),
+				"output_path", finalOutputPath)
+
+			e.Uploads.Add(1)
+
+			// Update the return path to the output file
+			newFilePath = finalOutputPath
+		}
+	}
+
+	slog.Info("successfully converted file to PDF",
+		"original_file", baseFileName,
+		"pdf_file", filepath.Base(newFilePath),
+		"pdf_size", len(pdfData))
+
+	return pdfMimeType, newFilePath, true, nil
+}
+
+// SaveResourceAsFile saves a resource (attachment) from a note to the filesystem
+// Returns the path to the saved file and any error that occurred
+func (e *EnexFile) SaveResourceAsFile(outputFolder string, note Note, resource Resource, decodedData []byte) (string, error) {
+	// Create output directory if it doesn't exist
+	if err := e.Fs.MkdirAll(outputFolder, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	// Get config settings
+	settings, err := config.GetConfig()
+	if err != nil {
+		return "", fmt.Errorf("failed to get config: %v", err)
+	}
+
+	// Use note title if filename is empty
+	filename := resource.ResourceAttributes.FileName
+	if filename == "" {
+		filename = helpers.SanitizeFilename(note.Title)
+		slog.Info("using note title as filename", "title", note.Title, "filename", filename)
+	}
+
+	// Ensure filename has correct extension based on MIME type
+	filename = helpers.EnsureCorrectExtension(filename, resource.Mime)
+	slog.Debug("filename after extension check", "filename", filename, "mime_type", resource.Mime)
+
+	// Add title prefix if enabled and titles don't match
+	if settings.TitlePrefix {
+		// Get the filename without extension
+		ext := filepath.Ext(filename)
+		filenameWithoutExt := strings.TrimSuffix(filename, ext)
+		noteTitle := helpers.SanitizeFilename(note.Title)
+
+		// Only add prefix if the title and filename are different
+		if !strings.EqualFold(noteTitle, filenameWithoutExt) {
+			filename = noteTitle + " - " + filename
+			slog.Debug("added title prefix to filename", "filename", filename)
+		} else {
+			slog.Debug("skipping title prefix - title matches filename",
+				"title", noteTitle,
+				"filename", filenameWithoutExt)
+		}
+	}
+
+	// Check if file exists and generate a new name with suffix if it does
+	fileName := filepath.Join(outputFolder, filename)
+	baseFileName := filename
+	counter := 1
+	foundIdentical := false
+
+	// Calculate checksum of the current file
+	currentChecksum := helpers.CalculateChecksum(decodedData)
+
+	for {
+		exists, err := afero.Exists(e.Fs, fileName)
+		if err != nil {
+			return "", fmt.Errorf("failed to check if file exists: %v", err)
+		}
+		if !exists {
+			break
+		}
+
+		// Read existing file and compare checksums
+		existingData, err := afero.ReadFile(e.Fs, fileName)
+		if err != nil {
+			return "", fmt.Errorf("failed to read existing file: %v", err)
+		}
+
+		existingChecksum := helpers.CalculateChecksum(existingData)
+		if existingChecksum == currentChecksum {
+			slog.Info("skipping identical file", "path", fileName)
+			e.Uploads.Add(1)
+			foundIdentical = true
+			break
+		}
+
+		// Files are different, try next suffix
+		ext := filepath.Ext(baseFileName)
+		nameWithoutExt := strings.TrimSuffix(baseFileName, ext)
+		fileName = filepath.Join(outputFolder, fmt.Sprintf("%s-%d%s", nameWithoutExt, counter, ext))
+		counter++
+	}
+
+	// Skip writing if we found an identical file
+	if foundIdentical {
+		return fileName, nil
+	}
+
+	// Write the file
+	if err := afero.WriteFile(e.Fs, fileName, decodedData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %v", err)
+	}
+
+	// Check for iWork file and convert to PDF if needed. Saves to disk as well.
+	pdfMimeType, pdfFilePath, converted, err := e.convertIWorkFileToPDF(
+		fileName,                              // Full path to the file on disk
+		filename,                              // Original base filename for logging
+		resource.Mime,                         // MIME type of the file
+		note.Created,                          // Creation timestamp of the note
+		resource.ResourceAttributes.Timestamp, // Resource timestamp if available
+		outputFolder,                          // Pass the output folder
+	)
+
+	if err == nil && converted {
+		// Update variables for further processing
+		resource.Mime = pdfMimeType
+		fileName = pdfFilePath
+	}
+
+	// Try to get the resource's timestamp using the helper function
+	fileTime, hasTime := parseTimestamp(resource.ResourceAttributes.Timestamp, note.Created)
+
+	// Try to set both modification and access times if we have a valid timestamp
+	if hasTime {
+		helpers.SetFileTimestamps(e.Fs, fileName, fileTime, "file")
+	}
+
+	slog.Info("saved file", "path", fileName)
+	e.Uploads.Add(1)
+	return fileName, nil
+}
+
+// convertIWorkDataToPDF handles all aspects of PDF conversion for files:
+// - Detects if a file is an iWork file that should be converted
+// - Checks if conversion is enabled in settings
+// - Creates a temporary file with exact original filename
+// - Converts the file to PDF if appropriate
+// - Returns the converted or original file data as needed
+//
+// This centralizes all conversion-related logic in one place
+func (e *EnexFile) convertIWorkDataToPDF(
+	fileData []byte, // Raw file data
+	originalFilename string, // Original filename (for preserving exact name)
+	mimeType string, // MIME type of the file
+	noteCreated string, // Creation timestamp of the note in Evernote format
+	resourceTimestamp string, // Timestamp of the resource in Evernote format (can be empty)
+	fileTime time.Time, // Parsed file time (can be zero)
+	outputFolder string, // Optional output folder
+) ([]byte, string, string, bool, error) {
+	// Check if this file should be converted to PDF using the centralized helper function
+	if !helpers.IsIWorkFileConvertible(mimeType, originalFilename) {
+		// File is not eligible for conversion or conversion is disabled
+		return fileData, mimeType, originalFilename, false, nil
+	}
+
+	// Log that we're going to convert this file
+	slog.Debug("Apple iWork file detected, converting to PDF",
+		"filename", originalFilename,
+		"filetype", mimeType)
+
+	// Create a temporary directory to hold our file with exact name
+	tempDir, err := os.MkdirTemp("", "enex_temp_*")
+	if err != nil {
+		slog.Error("failed to create temporary directory for conversion", "error", err)
+		return fileData, mimeType, originalFilename, false, err
+	}
+
+	// Use exact filename in the temporary directory
+	exactFilename := filepath.Base(originalFilename)
+	tempFilePath := filepath.Join(tempDir, exactFilename)
+
+	// Write the data to the temporary file with exact name
+	if err := os.WriteFile(tempFilePath, fileData, 0644); err != nil {
+		os.RemoveAll(tempDir) // Clean up on error
+		slog.Error("failed to write temporary file for conversion", "error", err)
+		return fileData, mimeType, originalFilename, false, err
+	}
+
+	// Set file timestamp if available
+	if !fileTime.IsZero() {
+		helpers.SetFileTimestamps(e.Fs, tempFilePath, fileTime, "temporary file")
+	}
+
+	// Format timestamp for conversion function if needed
+	formattedTimestamp := resourceTimestamp
+	if resourceTimestamp == "" && !fileTime.IsZero() {
+		formattedTimestamp = fileTime.Format("20060102T150405Z")
+	}
+
+	// Convert to PDF using our existing function
+	pdfMimeType, pdfFilePath, converted, err := e.convertIWorkFileToPDF(
+		tempFilePath,       // Full path to the temporary file
+		originalFilename,   // Original filename for logging
+		mimeType,           // MIME type
+		noteCreated,        // Creation timestamp of the note
+		formattedTimestamp, // Resource timestamp if available
+		outputFolder,       // Optional output folder
+	)
+
+	// Default result values
+	resultData := fileData
+	resultMimeType := mimeType
+	resultFilename := originalFilename
+
+	if err != nil {
+		slog.Error("failed to convert file to PDF",
+			"error", err,
+			"file", originalFilename)
+	} else if converted {
+		// Read the PDF file for upload if conversion was successful
+		pdfData, readErr := afero.ReadFile(e.Fs, pdfFilePath)
+		if readErr != nil {
+			slog.Error("failed to read converted PDF file",
+				"error", readErr,
+				"file", pdfFilePath)
+		} else {
+			// Update return values with PDF data
+			resultData = pdfData
+			resultMimeType = pdfMimeType
+			resultFilename = filepath.Base(pdfFilePath)
+
+			slog.Info("successfully converted file to PDF",
+				"original_file", originalFilename,
+				"pdf_file", resultFilename,
+				"pdf_size", len(pdfData))
+		}
+	}
+
+	// Clean up the temporary directory and its contents
+	os.RemoveAll(tempDir)
+
+	return resultData, resultMimeType, resultFilename, converted, err
+}
+
 func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChannel chan Note, outputFolder string) error {
 	slog.Debug("starting UploadFromNoteChannel")
 	settings, err := config.GetConfig()
@@ -190,16 +577,9 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					}
 
 					// Set file timestamps based on note creation time
-					if noteTime, err := time.Parse("20060102T150405Z", note.Created); err == nil {
-						if _, ok := e.Fs.(*afero.OsFs); ok {
-							if err := os.Chtimes(mdFilePath, noteTime, noteTime); err != nil {
-								slog.Error("failed to set markdown file timestamps", "error", err)
-							} else {
-								slog.Debug("set markdown file timestamps", "file", mdFilePath, "time", noteTime)
-							}
-						}
-					} else {
-						slog.Error("failed to parse note creation time for markdown file", "error", err)
+					noteTime, hasTime := parseTimestamp(note.Created, "")
+					if hasTime {
+						helpers.SetFileTimestamps(e.Fs, mdFilePath, noteTime, "markdown file")
 					}
 
 					slog.Info("saved note content as markdown", "path", mdFilePath)
@@ -259,13 +639,13 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 				}
 
 				// only process wanted file types
-				isWantedFileType, err := helpers.CheckFileType(resource.Mime, resource.ResourceAttributes.FileName)
+				isAllowed, err := helpers.IsAllowedFileType(resource.Mime, resource.ResourceAttributes.FileName)
 				if err != nil {
 					slog.Error("error when handling MIME type", "error", err)
 					continue
 				}
 
-				if !isWantedFileType {
+				if !isAllowed {
 					slog.Debug("skipping unwanted file type", "filename", resource.ResourceAttributes.FileName, "filetype", resource.Mime)
 					continue
 				}
@@ -334,136 +714,45 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					var filesToCleanup []string
 
 					for _, file := range extractedFiles {
-						slog.Info("uploading extracted file",
-							"name", file.Name,
-							"mime_type", file.MimeType)
-
 						// Check if this file type should be processed
-						isWantedFileType, err := helpers.CheckFileType(file.MimeType, file.Name)
+						isAllowed, err := helpers.IsAllowedFileType(file.MimeType, file.Name)
 						if err != nil {
 							slog.Error("error when handling MIME type", "error", err)
 							continue
 						}
 
-						if !isWantedFileType {
+						if !isAllowed {
 							slog.Debug("skipping unwanted extracted file type", "filename", file.Name, "filetype", file.MimeType)
 							continue
 						}
 
 						// Check if this is an Apple iWork file that should be converted to PDF
+						// Initialize with original file data
 						uploadData := file.Data
 						uploadMimeType := file.MimeType
 						uploadFileName := file.Name
 
-						// Check if this is an Apple iWork file that should be converted to PDF
-						isAppleFile := false
-						filenameLower := strings.ToLower(file.Name)
-						mimeTypeLower := strings.ToLower(file.MimeType)
+						// Use the improved handler function for PDF conversion
+						convertedData, convertedMimeType, convertedFilename, converted, _ := e.convertIWorkDataToPDF(
+							file.Data,
+							file.Name,
+							file.MimeType,
+							note.Created,
+							"", // No explicit timestamp string
+							file.FileTime,
+							outputFolder,
+						)
 
-						if strings.Contains(mimeTypeLower, "apple.pages") ||
-							strings.Contains(mimeTypeLower, "apple.numbers") ||
-							strings.Contains(mimeTypeLower, "apple.keynote") ||
-							strings.Contains(mimeTypeLower, "iwork") ||
-							strings.HasSuffix(filenameLower, ".pages") ||
-							strings.HasSuffix(filenameLower, ".numbers") ||
-							strings.HasSuffix(filenameLower, ".key") {
-							isAppleFile = true
-						}
+						if converted {
+							uploadData = convertedData
+							uploadMimeType = convertedMimeType
+							uploadFileName = convertedFilename
 
-						if isAppleFile && settings.ConvertAppleToPDF {
-							// Create a temporary file for conversion
-							tempFile, err := os.CreateTemp("", "apple_file_*"+filepath.Ext(file.Name))
-							if err != nil {
-								slog.Error("failed to create temporary file for conversion", "error", err)
-							} else {
-								tempFilePath := tempFile.Name()
-								_ = tempFile.Close()
-
-								// Write the data to the temporary file
-								if err := os.WriteFile(tempFilePath, file.Data, 0644); err != nil {
-									slog.Error("failed to write temporary file for conversion", "error", err)
-								} else {
-									// Convert to PDF
-									slog.Info("converting extracted iWork file to PDF before upload",
-										"file", file.Name,
-										"mime_type", file.MimeType)
-
-									pdfData, pdfMimeType, err := helpers.ConvertAppleFileToPDF(e.Fs, tempFilePath, file.MimeType, note.Created)
-									if err != nil {
-										slog.Error("failed to convert extracted file to PDF",
-											"error", err,
-											"file", file.Name)
-									} else {
-										// Use the converted PDF data and MIME type
-										uploadData = pdfData
-										uploadMimeType = pdfMimeType
-										uploadFileName = strings.TrimSuffix(file.Name, filepath.Ext(file.Name)) + ".pdf"
-
-										// If we're using an output folder, write the PDF file to disk
-										if outputFolder != "" {
-											pdfFilePath := filepath.Join(outputFolder, uploadFileName)
-											if err := afero.WriteFile(e.Fs, pdfFilePath, pdfData, 0644); err != nil {
-												slog.Error("failed to write converted PDF file to disk",
-													"error", err,
-													"file", pdfFilePath)
-											} else {
-												slog.Debug("wrote converted PDF file to disk",
-													"file", pdfFilePath,
-													"size", len(pdfData))
-
-												// Try to set file timestamps
-												// First try to use the original file's timestamp if available
-												var fileTime time.Time
-
-												// If we have a timestamp from the original file, use it
-												if !file.FileTime.IsZero() {
-													fileTime = file.FileTime
-													slog.Debug("using original file timestamp for PDF file",
-														"file", pdfFilePath,
-														"time", fileTime)
-												} else if note.Created != "" {
-													// Fall back to the note's creation time
-													var err error
-													fileTime, err = time.Parse("20060102T150405Z", note.Created)
-													if err != nil {
-														slog.Error("failed to parse note creation time for PDF file", "error", err)
-													} else {
-														slog.Debug("using note creation time for PDF file",
-															"file", pdfFilePath,
-															"time", fileTime)
-													}
-												}
-
-												// Set the file timestamps if we have a valid time
-												if !fileTime.IsZero() {
-													if _, ok := e.Fs.(*afero.OsFs); ok {
-														if err := os.Chtimes(pdfFilePath, fileTime, fileTime); err != nil {
-															slog.Error("failed to set PDF file timestamps", "error", err)
-														} else {
-															slog.Debug("set PDF file timestamps", "file", pdfFilePath, "time", fileTime)
-														}
-													}
-												} else {
-													slog.Debug("could not determine timestamp for PDF file", "file", pdfFilePath)
-												}
-											}
-										}
-
-										slog.Info("successfully converted extracted file to PDF",
-											"original_file", file.Name,
-											"pdf_file", uploadFileName,
-											"pdf_size", len(pdfData))
-									}
-
-									// Clean up the temporary file
-									os.Remove(tempFilePath)
-								}
+							// If we're using an output folder, the file is already saved
+							if outputFolder != "" {
+								// Skip upload to Paperless - we've saved to the file system
+								continue
 							}
-						} else if isAppleFile && !settings.ConvertAppleToPDF {
-							slog.Debug("skipping Apple iWork file because ConvertAppleToPDF is not enabled",
-								"filename", file.Name,
-								"mime_type", file.MimeType)
-							continue
 						}
 
 						fileNameWithoutExt := strings.TrimSuffix(uploadFileName, filepath.Ext(uploadFileName))
@@ -509,226 +798,12 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 
 				// if outputFolder is set, output to disk and continue
 				if outputFolder != "" {
-					if err := e.Fs.MkdirAll(outputFolder, 0755); err != nil {
+					_, err := e.SaveResourceAsFile(outputFolder, note, resource, decodedData)
+					if err != nil {
 						failedNoteChannel <- note
-						slog.Error(fmt.Sprintf("failed to create directory: %v", err))
+						slog.Error(fmt.Sprintf("failed to save resource file: %v", err))
 						break
 					}
-
-					// Use note title if filename is empty
-					filename := resource.ResourceAttributes.FileName
-					if filename == "" {
-						filename = helpers.SanitizeFilename(note.Title)
-						slog.Info("using note title as filename", "title", note.Title, "filename", filename)
-					}
-
-					// Ensure filename has correct extension based on MIME type
-					filename = helpers.EnsureCorrectExtension(filename, resource.Mime)
-					slog.Debug("filename after extension check", "filename", filename, "mime_type", resource.Mime)
-
-					// Add title prefix if enabled and titles don't match
-					if settings.TitlePrefix {
-						// Get the filename without extension
-						ext := filepath.Ext(filename)
-						filenameWithoutExt := strings.TrimSuffix(filename, ext)
-						noteTitle := helpers.SanitizeFilename(note.Title)
-
-						// Only add prefix if the title and filename are different
-						if !strings.EqualFold(noteTitle, filenameWithoutExt) {
-							filename = noteTitle + " - " + filename
-							slog.Debug("added title prefix to filename", "filename", filename)
-						} else {
-							slog.Debug("skipping title prefix - title matches filename",
-								"title", noteTitle,
-								"filename", filenameWithoutExt)
-						}
-					}
-
-					// Check if file exists and generate a new name with suffix if it does
-					fileName := filepath.Join(outputFolder, filename)
-					baseFileName := filename
-					counter := 1
-					foundIdentical := false
-
-					// Calculate checksum of the current file
-					currentChecksum := helpers.CalculateChecksum(decodedData)
-
-					for {
-						exists, err := afero.Exists(e.Fs, fileName)
-						if err != nil {
-							failedNoteChannel <- note
-							slog.Error(fmt.Sprintf("failed to check if file exists: %v", err))
-							break
-						}
-						if !exists {
-							break
-						}
-
-						// Read existing file and compare checksums
-						existingData, err := afero.ReadFile(e.Fs, fileName)
-						if err != nil {
-							failedNoteChannel <- note
-							slog.Error(fmt.Sprintf("failed to read existing file: %v", err))
-							break
-						}
-
-						existingChecksum := helpers.CalculateChecksum(existingData)
-						if existingChecksum == currentChecksum {
-							slog.Info("skipping identical file", "path", fileName)
-							e.Uploads.Add(1)
-							foundIdentical = true
-							break
-						}
-
-						// Files are different, try next suffix
-						ext := filepath.Ext(baseFileName)
-						nameWithoutExt := strings.TrimSuffix(baseFileName, ext)
-						fileName = filepath.Join(outputFolder, fmt.Sprintf("%s-%d%s", nameWithoutExt, counter, ext))
-						counter++
-					}
-
-					// Skip writing if we found an identical file
-					if foundIdentical {
-						continue
-					}
-
-					// Write the file first
-					if err := afero.WriteFile(e.Fs, fileName, decodedData, 0644); err != nil {
-						failedNoteChannel <- note
-						slog.Error(fmt.Sprintf("failed to write file %v", err))
-						break
-					}
-
-					// Check if this is an Apple iWork file that should be converted to PDF
-					if helpers.ShouldConvertToPDF(resource.Mime) {
-						// Write the original file first
-						if err := afero.WriteFile(e.Fs, fileName, decodedData, 0644); err != nil {
-							failedNoteChannel <- note
-							slog.Error(fmt.Sprintf("failed to write file %v", err))
-							break
-						}
-
-						// Get timestamp for the file - try resource timestamp first, then note creation time
-						var fileTime time.Time
-						if resource.ResourceAttributes.Timestamp != "" {
-							parsedTime, err := time.Parse("20060102T150405Z", resource.ResourceAttributes.Timestamp)
-							if err != nil {
-								slog.Debug("failed to parse resource timestamp, using note creation time",
-									"error", err,
-									"resource_timestamp", resource.ResourceAttributes.Timestamp)
-								fileTime, err = time.Parse("20060102T150405Z", note.Created)
-								if err != nil {
-									slog.Error("failed to parse note creation time", "error", err)
-								}
-							} else {
-								fileTime = parsedTime
-								slog.Debug("using resource timestamp for iWork file",
-									"file", fileName,
-									"time", fileTime)
-							}
-						} else {
-							fileTime, err = time.Parse("20060102T150405Z", note.Created)
-							if err != nil {
-								slog.Error("failed to parse note creation time", "error", err)
-							} else {
-								slog.Debug("using note creation time for iWork file (no resource timestamp)",
-									"file", fileName,
-									"time", fileTime)
-							}
-						}
-
-						// Set timestamp for the original iWork file before conversion
-						if !fileTime.IsZero() {
-							if _, ok := e.Fs.(*afero.OsFs); ok {
-								if err := os.Chtimes(fileName, fileTime, fileTime); err != nil {
-									slog.Error("failed to set timestamps for original iWork file", "error", err)
-								} else {
-									slog.Debug("set timestamps for original iWork file", "file", fileName, "time", fileTime)
-								}
-							}
-						}
-
-						// Convert to PDF
-						slog.Info("converting Apple iWork file to PDF",
-							"file", fileName,
-							"mime_type", resource.Mime)
-						pdfData, pdfMimeType, err := helpers.ConvertAppleFileToPDF(e.Fs, fileName, resource.Mime, note.Created)
-						if err != nil {
-							slog.Error("failed to convert file to PDF",
-								"error", err,
-								"file", fileName)
-							// Continue with the original file if conversion fails
-						} else {
-							// Use the converted PDF data
-							decodedData = pdfData
-							resource.Mime = pdfMimeType
-
-							// Update the filename to reflect the PDF extension
-							ext := filepath.Ext(fileName)
-							fileName = strings.TrimSuffix(fileName, ext) + ".pdf"
-
-							// Write the converted PDF file to disk
-							if err := afero.WriteFile(e.Fs, fileName, pdfData, 0644); err != nil {
-								failedNoteChannel <- note
-								slog.Error(fmt.Sprintf("failed to write PDF file %v", err))
-								break
-							}
-
-							slog.Info("successfully converted file to PDF",
-								"original_file", filename,
-								"pdf_file", filepath.Base(fileName),
-								"pdf_size", len(pdfData))
-						}
-					} else {
-						slog.Debug("file not eligible for PDF conversion",
-							"file", fileName,
-							"mime_type", resource.Mime,
-							"extension", filepath.Ext(fileName))
-					}
-
-					// Try to get the resource's timestamp first, fall back to note's creation time
-					var fileTime time.Time
-					var err error
-
-					if resource.ResourceAttributes.Timestamp != "" {
-						fileTime, err = time.Parse("20060102T150405Z", resource.ResourceAttributes.Timestamp)
-						if err != nil {
-							slog.Debug("failed to parse resource timestamp, using note creation time",
-								"error", err,
-								"resource_timestamp", resource.ResourceAttributes.Timestamp)
-							fileTime, err = time.Parse("20060102T150405Z", note.Created)
-							if err != nil {
-								slog.Error("failed to parse note creation time", "error", err)
-							}
-						} else {
-							slog.Debug("using resource timestamp",
-								"file", fileName,
-								"time", fileTime)
-						}
-					} else {
-						fileTime, err = time.Parse("20060102T150405Z", note.Created)
-						if err != nil {
-							slog.Error("failed to parse note creation time", "error", err)
-						} else {
-							slog.Debug("using note creation time (no resource timestamp)",
-								"file", fileName,
-								"time", fileTime)
-						}
-					}
-
-					// Try to set both modification and access times if we have a valid timestamp
-					if !fileTime.IsZero() {
-						if _, ok := e.Fs.(*afero.OsFs); ok {
-							if err := os.Chtimes(fileName, fileTime, fileTime); err != nil {
-								slog.Error("failed to set file timestamps", "error", err)
-							} else {
-								slog.Debug("set file timestamps", "file", fileName, "time", fileTime)
-							}
-						}
-					}
-
-					slog.Info("saved file", "path", fileName)
-					e.Uploads.Add(1)
 					continue
 				}
 
@@ -870,55 +945,10 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					resource.ResourceAttributes.FileName = note.Title
 				}
 
-				// Check if this is an Apple iWork file that should be converted to PDF
+				// Initialize upload variables
 				uploadData := decodedData
 				uploadMimeType := resource.Mime
 				uploadFileName := resource.ResourceAttributes.FileName
-
-				if helpers.ShouldConvertToPDF(resource.Mime) {
-					// Create a temporary file for conversion
-					tempFile, err := os.CreateTemp("", "apple_file_*"+filepath.Ext(resource.ResourceAttributes.FileName))
-					if err != nil {
-						slog.Error("failed to create temporary file for conversion", "error", err)
-					} else {
-						tempFilePath := tempFile.Name()
-						_ = tempFile.Close()
-
-						// Write the data to the temporary file
-						if err := os.WriteFile(tempFilePath, decodedData, 0644); err != nil {
-							slog.Error("failed to write temporary file for conversion", "error", err)
-						} else {
-							// Convert to PDF
-							slog.Info("converting iWork file to PDF before upload",
-								"file", resource.ResourceAttributes.FileName,
-								"mime_type", resource.Mime)
-
-							pdfData, pdfMimeType, err := helpers.ConvertAppleFileToPDF(e.Fs, tempFilePath, resource.Mime, note.Created)
-							if err != nil {
-								slog.Error("failed to convert file to PDF",
-									"error", err,
-									"file", resource.ResourceAttributes.FileName)
-							} else {
-								// Use the converted PDF data and MIME type
-								uploadData = pdfData
-								uploadMimeType = pdfMimeType
-								uploadFileName = strings.TrimSuffix(resource.ResourceAttributes.FileName, filepath.Ext(resource.ResourceAttributes.FileName)) + ".pdf"
-								slog.Info("successfully converted file to PDF before upload",
-									"original_file", resource.ResourceAttributes.FileName,
-									"pdf_file", uploadFileName,
-									"pdf_size", len(pdfData))
-							}
-
-							// Clean up the temporary file
-							os.Remove(tempFilePath)
-						}
-					}
-				} else {
-					slog.Debug("file not eligible for PDF conversion before upload",
-						"file", resource.ResourceAttributes.FileName,
-						"mime_type", resource.Mime,
-						"extension", filepath.Ext(resource.ResourceAttributes.FileName))
-				}
 
 				// Skip upload if we're using an output folder
 				if outputFolder != "" {
@@ -926,6 +956,29 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						"file", uploadFileName,
 						"output_folder", outputFolder)
 					continue
+				}
+
+				// Handle PDF conversion if needed
+				fileTime, _ := parseTimestamp(resource.ResourceAttributes.Timestamp, note.Created)
+				convertedData, convertedMimeType, convertedFilename, converted, _ := e.convertIWorkDataToPDF(
+					decodedData,
+					resource.ResourceAttributes.FileName,
+					resource.Mime,
+					note.Created,
+					resource.ResourceAttributes.Timestamp,
+					fileTime,
+					outputFolder,
+				)
+
+				if converted {
+					uploadData = convertedData
+					uploadMimeType = convertedMimeType
+					uploadFileName = convertedFilename
+
+					slog.Info("successfully converted file to PDF before upload",
+						"original_file", resource.ResourceAttributes.FileName,
+						"pdf_file", uploadFileName,
+						"pdf_size", len(uploadData))
 				}
 
 				id, err := paperless.UploadFile(e.client, documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
