@@ -229,8 +229,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 		// Process attachments if any exist
 		if len(note.Resources) > 0 {
 			e.NumNotes.Add(1)
-			var documentIDs []int
-			seenIDs := make(map[int]bool)
 
 			for _, resource := range note.Resources {
 				slog.Info("processing file",
@@ -489,17 +487,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						// Add file to cleanup list if it's in a temporary directory
 						if extractDir == os.TempDir() {
 							filesToCleanup = append(filesToCleanup, file.Path)
-						}
-
-						// Check for duplicate IDs at the collection point
-						if !seenIDs[id] {
-							seenIDs[id] = true
-							documentIDs = append(documentIDs, id)
-						} else {
-							slog.Warn("duplicate document ID encountered during upload",
-								"document_id", id,
-								"file", file.Name,
-								"note", note.Title)
 						}
 					}
 
@@ -950,17 +937,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 				slog.Debug("successfully uploaded file",
 					"file", resource.ResourceAttributes.FileName,
 					"document_id", id)
-
-				// Check for duplicate IDs at the collection point
-				if !seenIDs[id] {
-					seenIDs[id] = true
-					documentIDs = append(documentIDs, id)
-				} else {
-					slog.Warn("duplicate document ID encountered during upload",
-						"document_id", id,
-						"file", resource.ResourceAttributes.FileName,
-						"note", note.Title)
-				}
 			}
 		}
 	}
