@@ -3,30 +3,46 @@ PaperlessAPI: http://localhost:8000
 # Username: admin
 # Password: admin
 Token: eec905fc6539e6fedfb73a1a5cb4dd191d83c8df
-FileTypes:
+FileTypes: # either file extension or mime type.
   - pdf
   - txt
   - jpeg
   - png
   - webp
-  - gif
   - tiff
+  - zip
+  - plain
+  - key
+  - numbers
+  - pages
+  - doc
+  - docx
+  - xlsx
+  - odt
+  - ods
+  - md
+  - csv
 
 # Optional settings
+
 # ExcludeFileTypes:          # File types to exclude when using "any" in FileTypes
 #  - jpg
 #  - exe
 #  - psd
 #  - ai
-# OutputFolder: ""           # Output to folder instead of Paperless
-# AdditionalTags:            # Additional tags to add to all documents
+#  - gif
+
+# OutputFolder: "output"           # Output to folder instead of Paperless
+# ExcludedOutputFolder: "excluded" # Folder to save excluded files
+# NoNameFolder: "noname"           # Folder to save files with no original filename
+# AdditionalTags: # Additional tags to add to all documents
 #   - tag1
 #   - tag2
-# Unzip: false               # Whether to unzip .zip files found in notes
-# LinkFieldID: 0             # Custom field ID for document linking
-# TitlePrefix: false         # Whether to prefix filenames with note titles
-# ConvertMarkdown: false     # Whether to convert note content to markdown
+# Unzip: true                 # Whether to unzip .zip files found in notes
+# LinkFieldID: 0              # Custom field ID for document linking
+# TitlePrefix: true           # Whether to prefix filenames with note titles
+# ConvertMarkdown: true       # Whether to convert note content to markdown
 # ConvertAppleToPDF: false    # Whether to convert Apple iWork files to PDF
-# ConcurrentWorkers: 1       # Number of concurrent workers
-# UseFilenameAsTag: false    # Whether to use the ENEX filename as a tag
-# CorrespondentTagPrefix: "@"  # Prefix for tags to be used as correspondents
+# ConcurrentWorkers: 1        # Number of concurrent workers
+# UseFilenameAsTag: true      # Whether to use the ENEX filename as a tag
+# CorrespondentTagPrefix: "@" # Prefix for tags to be used as correspondents
