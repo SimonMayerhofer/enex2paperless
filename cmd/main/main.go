@@ -52,7 +52,7 @@ func main() {
 			}
 
 			// use custom slog Handler
-			logger := slog.New(logging.NewHandler(opts, nocolor))
+			logger := slog.New(logging.NewHandler(opts, nocolor, verbose))
 			slog.SetDefault(logger)
 
 			// handle configuration
