@@ -54,7 +54,7 @@ type ExtractedFile struct {
 
 // UnzipFile takes a byte slice of a zip file and extracts its contents to the specified directory
 // It returns a slice of extracted files with their paths and data
-func UnzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]ExtractedFile, error) {
+func UnzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string, noteTitle string) ([]ExtractedFile, error) {
 	var extractedFiles []ExtractedFile
 
 	// Create a reader from the byte slice
@@ -97,8 +97,33 @@ func UnzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 			return extractedFiles, fmt.Errorf("failed to open file in zip: %v", err)
 		}
 
+		uploadFileName := file.Name
+
+		settings, err := config.GetConfig()
+		if err != nil {
+			slog.Error("failed to get config", "error", err)
+			return extractedFiles, fmt.Errorf("failed to get config: %v", err)
+		}
+		// Apply title prefix if enabled & output folder is specified
+		if settings.TitlePrefix && settings.OutputFolder != "" {
+			// Get the filename without extension
+			ext := filepath.Ext(uploadFileName)
+			filenameWithoutExt := strings.TrimSuffix(uploadFileName, ext)
+			noteTitle = SanitizeFilename(noteTitle)
+
+			// Only add prefix if the title and filename are different
+			if !strings.EqualFold(noteTitle, filenameWithoutExt) {
+				uploadFileName = noteTitle + " - " + uploadFileName
+				slog.Debug("added title prefix to extracted file", "filename", uploadFileName)
+			} else {
+				slog.Debug("skipping title prefix - title matches extracted filename",
+					"title", noteTitle,
+					"filename", filenameWithoutExt)
+			}
+		}
+
 		// Create the file path
-		filePath := filepath.Join(destDir, file.Name)
+		filePath := filepath.Join(destDir, uploadFileName)
 
 		// Read the file contents
 		var buf bytes.Buffer
@@ -150,7 +175,7 @@ func UnzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string) ([]
 		// Add file to extracted files list
 		extractedFiles = append(extractedFiles, ExtractedFile{
 			Path:        filePath,
-			Name:        file.Name,
+			Name:        uploadFileName,
 			Data:        buf.Bytes(),
 			MimeType:    mimeType,
 			ZipFileName: zipFileName,

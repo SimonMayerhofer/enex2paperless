@@ -704,7 +704,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						extractDir = os.TempDir()
 					}
 
-					extractedFiles, err := helpers.UnzipFile(decodedData, extractDir, e.Fs, resource.ResourceAttributes.FileName)
+					extractedFiles, err := helpers.UnzipFile(decodedData, extractDir, e.Fs, resource.ResourceAttributes.FileName, note.Title)
 					if err != nil {
 						slog.Error("failed to extract zip file", "error", err)
 						continue
