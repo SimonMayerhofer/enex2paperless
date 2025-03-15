@@ -325,12 +325,14 @@ func (e *EnexFile) decodeBase64ResourceData(rawData string) ([]byte, error) {
 	// Validate that data is valid base64
 	validBase64 := regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
 	if !validBase64.MatchString(data) {
+		slog.Error("data is not valid base64", "data", data)
 		return nil, fmt.Errorf("data is not valid base64")
 	}
 
 	// Decode the base64 data
 	decodedData, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
+		slog.Error("error decoding resource data", "error", err)
 		return nil, fmt.Errorf("error decoding resource data: %v", err)
 	}
 
@@ -656,7 +658,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 				// Decode the base64 Resource.Data
 				decodedData, err := e.decodeBase64ResourceData(resource.Data)
 				if err != nil {
-					slog.Error("error when handling MIME type", "error", err)
 					continue
 				}
 
