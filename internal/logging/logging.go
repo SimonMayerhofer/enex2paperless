@@ -142,11 +142,6 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 
 	attrStr := ""
 	if attrs != nil {
-		// Add worker ID as an attribute for debugging
-		if workerID != 0 {
-			attrs["worker"] = workerID
-		}
-
 		bytes, err := json.Marshal(attrs)
 		if err != nil {
 			return fmt.Errorf("error when marshaling attrs: %w", err)
