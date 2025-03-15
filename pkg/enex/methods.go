@@ -3,7 +3,6 @@ package enex
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"enex2paperless/internal/config"
@@ -648,7 +647,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 					mdNote.Tags = append(mdNote.Tags, "markdown")
 
 					// Upload the markdown content as a new document
-					id, err := paperless.UploadFileWithContext(context.Background(), e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), mdNote, url, e.taskTracker, failedNoteChannel)
+					id, err := paperless.UploadFile(e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), mdNote, url, e.taskTracker, failedNoteChannel)
 					if err != nil {
 						slog.Error("failed to upload markdown content", "error", err)
 					} else {
@@ -884,7 +883,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 							continue
 						}
 
-						id, err := paperless.UploadFileWithContext(context.Background(), e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
+						id, err := paperless.UploadFile(e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 						if err != nil {
 							slog.Error("failed to upload extracted file", "error", err)
 						} else {
@@ -1098,7 +1097,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 						"pdf_size", len(uploadData))
 				}
 
-				id, err := paperless.UploadFileWithContext(context.Background(), e.client, documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
+				id, err := paperless.UploadFile(e.client, documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 				if err != nil {
 					failedNoteChannel <- note
 					slog.Error("failed to upload file", "error", err)

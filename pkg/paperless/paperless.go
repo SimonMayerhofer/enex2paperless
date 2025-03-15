@@ -321,9 +321,10 @@ func FormatCorrespondentName(name string) string {
 	return strings.Join(words, " ")
 }
 
-// UploadFileWithContext is the context-aware version of UploadFile
-// It takes a context parameter that can be used for logging with worker ID information
-func UploadFileWithContext(ctx context.Context, client *http.Client, title string, fileName string, mimeType string, data []byte, note interface{}, url string, taskTracker interface{}, failedNoteChannel interface{}) (int, error) {
+// UploadFile uploads a file to Paperless
+func UploadFile(client *http.Client, title string, fileName string, mimeType string, data []byte, note interface{}, url string, taskTracker interface{}, failedNoteChannel interface{}) (int, error) {
+	ctx := context.Background()
+
 	// Create a new buffer and multipart writer for form
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -600,12 +601,6 @@ func UploadFileWithContext(ctx context.Context, client *http.Client, title strin
 		"response", docDetails,
 		"title", title)
 	return 0, fmt.Errorf("no document ID found in response")
-}
-
-// UploadFile uploads a file to Paperless and returns the document ID
-func UploadFile(client *http.Client, title string, fileName string, mimeType string, data []byte, note interface{}, url string, taskTracker interface{}, failedNoteChannel interface{}) (int, error) {
-	// Call the context-aware version with a background context
-	return UploadFileWithContext(context.Background(), client, title, fileName, mimeType, data, note, url, taskTracker, failedNoteChannel)
 }
 
 // Helper function to safely send to the failed channel
