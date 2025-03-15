@@ -29,9 +29,16 @@ func main() {
 			if processTasksOnly {
 				return nil
 			}
-			// Otherwise require at least one argument (the ENEX file)
+
+			// Allow running without arguments when using directory flag
+			dirMode, _ := cmd.Flags().GetBool("dir")
+			if dirMode && len(args) == 1 {
+				return nil
+			}
+
+			// Otherwise require at least one argument (the ENEX file or directory path)
 			if len(args) < 1 {
-				return fmt.Errorf("requires at least one argument (ENEX file path)")
+				return fmt.Errorf("requires at least one argument (ENEX file path or directory path)")
 			}
 			return nil
 		},
@@ -101,9 +108,6 @@ func main() {
 				os.Exit(1)
 			}
 
-			// Get current settings to check UseFilenameAsTag
-			currentSettings, _ := config.GetConfig()
-
 			useFilenameAsTag, err := cmd.Flags().GetBool("use-filename-tag")
 			if err != nil {
 				fmt.Println("Error retrieving tag flag:", err)
@@ -112,14 +116,6 @@ func main() {
 			// Only override config if explicitly set on command line
 			if cmd.Flags().Changed("use-filename-tag") {
 				config.SetUseFilenameAsTag(useFilenameAsTag)
-			}
-
-			// Check both the flag and the config setting and ensure we have arguments
-			if (useFilenameAsTag || currentSettings.UseFilenameAsTag) && len(args) > 0 {
-				// Extract filename without path and extension
-				baseName := filepath.Base(args[0])
-				tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-				tags = append(tags, tagName)
 			}
 
 			if len(tags) > 0 {
@@ -277,6 +273,9 @@ func main() {
 	var processTasksOnly bool
 	rootCmd.PersistentFlags().BoolVar(&processTasksOnly, "process-tasks", false, "Only process pending tasks and link documents (skip file processing)")
 
+	var dirMode bool
+	rootCmd.PersistentFlags().BoolVarP(&dirMode, "dir", "d", false, "process all ENEX files in the specified directory without prompting for confirmation")
+
 	// run root command
 	err := rootCmd.Execute()
 	if err != nil {
@@ -328,6 +327,111 @@ func importENEX(cmd *cobra.Command, args []string) {
 		slog.Info(fmt.Sprintf("Excluded files output folder is enabled. Target is: %v", settings.ExcludedOutputFolder))
 	}
 
+	// Check if we're in directory mode
+	dirMode, _ := cmd.Flags().GetBool("dir")
+
+	// If not in directory mode, check if the path is a directory and prompt the user
+	if !dirMode && len(args) > 0 {
+		dirPath := args[0]
+		fileInfo, err := os.Stat(dirPath)
+
+		// If the path exists and is a directory
+		if err == nil && fileInfo.IsDir() {
+			// Find all ENEX files in the directory
+			enexFiles, err := findEnexFiles(dirPath)
+			if err == nil && len(enexFiles) > 0 {
+				fmt.Printf("Found %d ENEX files in directory '%s'.\n", len(enexFiles), dirPath)
+				fmt.Print("Do you want to process all ENEX files in this directory? (y/n): ")
+
+				response := getUserInput()
+				if strings.ToLower(response) == "y" {
+					// User wants to process all files, set dirMode to true
+					dirMode = true
+				} else {
+					// User declined to process the directory
+					fmt.Println("Directory processing declined. Please specify a single ENEX file instead.")
+					os.Exit(0)
+				}
+			}
+		}
+	}
+
+	if dirMode {
+		if len(args) == 0 {
+			slog.Error("No directory specified")
+			os.Exit(1)
+		}
+
+		dirPath := args[0]
+
+		// Check if the path is a directory
+		fileInfo, err := os.Stat(dirPath)
+		if err != nil {
+			slog.Error("Error accessing directory", "error", err)
+			os.Exit(1)
+		}
+
+		if !fileInfo.IsDir() {
+			slog.Error("Specified path is not a directory", "path", dirPath)
+			os.Exit(1)
+		}
+
+		// Find all ENEX files in the directory
+		enexFiles, err := findEnexFiles(dirPath)
+		if err != nil {
+			slog.Error("Error finding ENEX files", "error", err)
+			os.Exit(1)
+		}
+
+		if len(enexFiles) == 0 {
+			slog.Error("No ENEX files found in directory", "directory", dirPath)
+			os.Exit(1)
+		}
+
+		slog.Info("Found ENEX files in directory", "count", len(enexFiles), "directory", dirPath)
+
+		// Create a single EnexFile instance for all processing
+		inputFile := enex.NewEnexFile()
+
+		// Process each file sequentially
+		for _, filePath := range enexFiles {
+			slog.Info("Processing ENEX file", "file", filePath)
+
+			// Check if we need to add the filename as a tag
+			if settings.UseFilenameAsTag {
+				// Extract filename without path and extension
+				baseName := filepath.Base(filePath)
+				tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+
+				// Add to additional tags if not already added by the command-line flag
+				if !contains(settings.AdditionalTags, tagName) {
+					newTags := append(settings.AdditionalTags, tagName)
+					config.SetAdditionalTags(newTags)
+				}
+
+				slog.Info("Additional tags", "tags", settings.AdditionalTags)
+				slog.Info("Tag name", "tag", tagName)
+				slog.Info("File path", "path", filePath)
+				slog.Info("Directory path", "path", dirPath)
+			}
+
+			// Process the file
+			processEnexFile(cmd, inputFile, filePath, settings)
+		}
+
+		// Process pending tasks and link documents after all files are processed
+		logging.SetWorkerLogger(0) // Use main process ID for this
+		slog.Info("Processing pending tasks and linking documents for all files")
+		if err := inputFile.ProcessPendingTasks(); err != nil {
+			slog.Error("failed to process pending tasks and link documents", "error", err)
+		}
+
+		slog.Info("All ENEX files processed successfully")
+		return
+	}
+
+	// Single ENEX file processing mode
+
 	// Check if we need to add the filename as a tag
 	if settings.UseFilenameAsTag && len(args) > 0 {
 		// Extract filename without path and extension
@@ -341,12 +445,6 @@ func importENEX(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// determine how many concurrent uploaders we want
-	howMany := settings.ConcurrentWorkers
-	if howMany <= 0 {
-		howMany = 1 // Default to 1 if not set in config
-	}
-
 	// Ensure we have a file to process
 	if len(args) == 0 {
 		slog.Error("No ENEX file specified")
@@ -356,6 +454,44 @@ func importENEX(cmd *cobra.Command, args []string) {
 	filePath := args[0]
 	inputFile := enex.NewEnexFile()
 
+	// Process the single file
+	processEnexFile(cmd, inputFile, filePath, settings)
+
+	// Process pending tasks and link documents
+	logging.SetWorkerLogger(0) // Use main process ID for this
+	slog.Info("Processing pending tasks and linking documents")
+	if err := inputFile.ProcessPendingTasks(); err != nil {
+		slog.Error("failed to process pending tasks and link documents", "error", err)
+	}
+
+	slog.Info("ENEX processing done")
+}
+
+// findEnexFiles finds all .enex files in the specified directory (non-recursive)
+func findEnexFiles(dirPath string) ([]string, error) {
+	var enexFiles []string
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("error reading directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue // Skip subdirectories
+		}
+
+		// Check if the file has .enex extension
+		if strings.HasSuffix(strings.ToLower(entry.Name()), ".enex") {
+			enexFiles = append(enexFiles, filepath.Join(dirPath, entry.Name()))
+		}
+	}
+
+	return enexFiles, nil
+}
+
+// processEnexFile processes a single ENEX file
+func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath string, settings config.Config) {
 	// prepare channels
 	noteChannel := make(chan enex.Note)
 	failedNoteChannel := make(chan enex.Note)
@@ -364,7 +500,7 @@ func importENEX(cmd *cobra.Command, args []string) {
 	// Failure Catcher
 	var failedNotes []enex.Note
 	go func() {
-		// Register failed note catcher4
+		// Register failed note catcher
 		logging.SetWorkerLogger(0)
 		slog.Debug("Starting failed note catcher")
 		enex.FailedNoteCatcher(failedNoteChannel, &failedNotes)
@@ -374,7 +510,7 @@ func importENEX(cmd *cobra.Command, args []string) {
 
 	// Producer
 	go func() {
-		// Register producer1
+		// Register producer
 		logging.SetWorkerLogger(0)
 		slog.Info("Starting ENEX file processing", "file", filePath)
 		err := inputFile.ReadFromFile(filePath, noteChannel)
@@ -387,6 +523,11 @@ func importENEX(cmd *cobra.Command, args []string) {
 
 	// Consumers
 	var wg sync.WaitGroup
+	howMany := settings.ConcurrentWorkers
+	if howMany <= 0 {
+		howMany = 1 // Default to 1 if not set in config
+	}
+
 	wg.Add(howMany)
 
 	for i := 0; i < howMany; i++ {
@@ -417,16 +558,8 @@ func importENEX(cmd *cobra.Command, args []string) {
 	slog.Debug("waiting for FailedNoteCatcher")
 	<-failedNoteSignal
 
-	// Process pending tasks and link documents after all workers have finished
-	// This ensures only one process is handling the task tracking
-	logging.SetWorkerLogger(0) // Use main process ID for this
-	slog.Info("Processing pending tasks and linking documents")
-	if err := inputFile.ProcessPendingTasks(); err != nil {
-		slog.Error("failed to process pending tasks and link documents", "error", err)
-	}
-
 	// log results
-	slog.Info("ENEX processing done",
+	slog.Info("ENEX file processing done",
 		slog.Int("numberOfNotes", int(inputFile.NumNotes.Load())),
 		slog.Int("totalFiles", int(inputFile.Uploads.Load())),
 	)
@@ -449,7 +582,7 @@ func importENEX(cmd *cobra.Command, args []string) {
 
 		// this feeds the failedNotes slice into the failedNoteChannel
 		go func() {
-			// Register retry failed note catcher3
+			// Register retry failed note catcher
 			logging.SetWorkerLogger(0)
 			slog.Debug("Starting retry failed note catcher")
 			enex.FailedNoteCatcher(failedNoteChannel, &failedThisCycle)
@@ -460,7 +593,7 @@ func importENEX(cmd *cobra.Command, args []string) {
 		// this feeds the failedNotes into the Retry Channel
 		retryChannel := make(chan enex.Note)
 		go func() {
-			// Register retry feeder2
+			// Register retry feeder
 			logging.SetWorkerLogger(0)
 			slog.Debug("Starting retry feeder")
 			enex.RetryFeeder(&failedNotes, retryChannel)
@@ -494,15 +627,6 @@ func importENEX(cmd *cobra.Command, args []string) {
 		// we move the notes that failed this cycle into the failedNotes variable
 		failedNotes = failedThisCycle
 	}
-
-	// Process any pending tasks from retries
-	logging.SetWorkerLogger(0) // Use main process ID for this
-	slog.Info("Processing pending tasks from retries")
-	if err := inputFile.ProcessPendingTasks(); err != nil {
-		slog.Error("failed to process pending tasks and link documents from retries", "error", err)
-	}
-
-	slog.Info("all notes processed successfully")
 }
 
 func PressKeyToContinue() {

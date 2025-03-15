@@ -883,11 +883,9 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 							continue
 						}
 
-						id, err := paperless.UploadFile(e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
+						_, err = paperless.UploadFile(e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 						if err != nil {
 							slog.Error("failed to upload extracted file", "error", err)
-						} else {
-							slog.Info("uploaded note content as PDF", "document_id", id)
 						}
 						// Add file to cleanup list if it's in a temporary directory
 						if extractDir == os.TempDir() {

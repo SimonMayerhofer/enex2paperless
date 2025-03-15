@@ -20,6 +20,7 @@ This tool was initially created by [kevinzehnder](https://github.com/kevinzehnde
 - ✅ **Fix file extensions for exported files** in case the evernote exported files have the wrong or missing extensions.
 - ✅ **Add option to exclude specific file types** when using the "any" option in FileTypes.
 - ✅ **Save excluded files** to separate folder.
+- ✅ **Process multiple ENEX files** from a directory in sequence.
 
 Planned features:
 - ⚪ Save files from notes witch had errors to folder
@@ -33,6 +34,7 @@ Usage:
 Flags:
   -c, --concurrent int           Number of concurrent consumers (default 1)
       --convert-apple-pdf        Convert Apple iWork files to PDF
+  -d, --dir                      Process all ENEX files in a specified directory without prompting for confirmation
   -e, --excluded-outputfolder    Folder to save excluded files
   -m, --convert-markdown         Convert note content to markdown format
       --correspondent-tag-prefix Prefix for tags to be used as correspondents
@@ -53,6 +55,16 @@ Flags:
 - Extract files to the same location as your ENEX file.
 - Edit `config.yaml` (see below) and add your personal information. This depends on your installation of Paperless.
 - Run `enex2paperless MyEnexFile.enex`
+
+You can also process all ENEX files in a directory at once:
+```shell
+enex2paperless /path/to/enex/files
+```
+
+When a directory is provided, the tool will detect it, count the ENEX files inside, and ask if you want to process all of them. To disable the confirmation you can add the `-d` / `--dir` flag:
+```shell
+enex2paperless /path/to/enex/files -d
+```
 
 To authenticate against Paperless, you can either use a token or a username/password combination. Don't configure both variations at the same time.
 
@@ -105,6 +117,7 @@ The following table shows the mapping between config.yaml settings and command-l
 | ConvertAppleToPDF      | --convert-apple-pdf         | Convert Apple iWork files to PDF |
 | ConcurrentWorkers      | -c, --concurrent            | Number of concurrent workers |
 | CorrespondentTagPrefix | --correspondent-tag-prefix  | Prefix for tags to be used as correspondents |
+| N/A                    | -d, --dir                   | Process all ENEX files in the specified directory without prompting for confirmation |
 | ExcludedOutputFolder   | -e, --excluded-outputfolder | Folder to save excluded files |
 | LinkFieldID            | -l, --link                  | Custom field ID for document linking |
 | NoNameFolder           | --noname                    | Folder to save files with no original filename |
