@@ -676,7 +676,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 				}
 
 				// If this is an iWork file and conversion is disabled, skip it
-				if isAppleFile && !settings.ConvertAppleToPDF {
+				if isAppleFile && !settings.ConvertAppleToPDF && settings.OutputFolder == "" {
 					slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled",
 						"filename", resource.ResourceAttributes.FileName,
 						"mime_type", resource.Mime)
