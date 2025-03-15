@@ -630,13 +630,25 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 					documentTitle := note.Title
 					mdFileName := helpers.SanitizeFilename(note.Title) + ".md"
 
-					// Add markdown tag to the note's tags
-					noteTags := append([]string{}, note.Tags...)
-					noteTags = append(noteTags, "markdown")
-					note.Tags = noteTags
+					// Create a deep copy of the note for the markdown file
+					mdNote := Note{
+						Title:          note.Title,
+						Content:        note.Content,
+						Created:        note.Created,
+						Updated:        note.Updated,
+						NoteAttributes: note.NoteAttributes,
+						Resources:      note.Resources,
+					}
+
+					// Create a copy of the tags slice
+					mdNote.Tags = make([]string, len(note.Tags))
+					copy(mdNote.Tags, note.Tags)
+
+					// Add markdown tag only to the markdown file's note
+					mdNote.Tags = append(mdNote.Tags, "markdown")
 
 					// Upload the markdown content as a new document
-					id, err := paperless.UploadFileWithContext(context.Background(), e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), note, url, e.taskTracker, failedNoteChannel)
+					id, err := paperless.UploadFileWithContext(context.Background(), e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), mdNote, url, e.taskTracker, failedNoteChannel)
 					if err != nil {
 						slog.Error("failed to upload markdown content", "error", err)
 					} else {

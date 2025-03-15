@@ -311,7 +311,7 @@ Alternatively, you can set this in your `config.yaml` file:
 ConvertMarkdown: true
 ```
 
-Files will be tagged with "markdown" for easy identification. Only notes with text in the content will be uploaded as markdown files.
+The markdown content will be tagged with the "markdown" tag for easy identification. This tag is only applied to the markdown files, not to other attachments in the same note. Only notes with text in the content will be uploaded as markdown files.
 
 ### NoName Folder for Files Without Filenames
 
