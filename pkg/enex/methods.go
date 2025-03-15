@@ -661,23 +661,8 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					continue
 				}
 
-				// Check if this is an iWork file by filename
-				filenameLower := strings.ToLower(resource.ResourceAttributes.FileName)
-				isAppleFile := strings.HasSuffix(filenameLower, ".pages") ||
-					strings.HasSuffix(filenameLower, ".numbers") ||
-					strings.HasSuffix(filenameLower, ".key")
-
-				// Also check by MIME type
-				mimeTypeLower := strings.ToLower(resource.Mime)
-				if strings.Contains(mimeTypeLower, "pages") ||
-					strings.Contains(mimeTypeLower, "numbers") ||
-					strings.Contains(mimeTypeLower, "keynote") ||
-					strings.Contains(mimeTypeLower, "iwork") {
-					isAppleFile = true
-				}
-
-				// If this is an iWork file and conversion is disabled, skip it
-				if isAppleFile && !settings.ConvertAppleToPDF && settings.OutputFolder == "" {
+				isIWorkFile := helpers.IsIWorkFile(resource.Mime, resource.ResourceAttributes.FileName)
+				if isIWorkFile && !settings.ConvertAppleToPDF && settings.OutputFolder == "" {
 					slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled",
 						"filename", resource.ResourceAttributes.FileName,
 						"mime_type", resource.Mime)
@@ -785,6 +770,14 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						isAllowed, err := helpers.IsAllowedFileType(file.MimeType, file.Name)
 						if err != nil {
 							slog.Error("error when handling MIME type", "error", err)
+							continue
+						}
+
+						isIWorkFile := helpers.IsIWorkFile(file.MimeType, file.Name)
+						if isIWorkFile && !settings.ConvertAppleToPDF && settings.OutputFolder == "" {
+							slog.Info("skipping iWork file because ConvertAppleToPDF is not enabled",
+								"filename", file.Name,
+								"mime_type", file.MimeType)
 							continue
 						}
 
