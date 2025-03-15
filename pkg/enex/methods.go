@@ -3,6 +3,7 @@ package enex
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"enex2paperless/internal/config"
@@ -554,6 +555,7 @@ func (e *EnexFile) convertIWorkDataToPDF(
 	return resultData, resultMimeType, resultFilename, converted, err
 }
 
+// UploadFromNoteChannel processes notes from a channel and uploads them to Paperless-NGX or saves to a folder
 func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChannel chan Note, outputFolder string) error {
 	slog.Debug("starting UploadFromNoteChannel")
 	settings, err := config.GetConfig()
@@ -624,7 +626,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					note.Tags = noteTags
 
 					// Upload the markdown content as a new document
-					id, err := paperless.UploadFile(e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), note, url, e.taskTracker, failedNoteChannel)
+					id, err := paperless.UploadFileWithContext(context.Background(), e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), note, url, e.taskTracker, failedNoteChannel)
 					if err != nil {
 						slog.Error("failed to upload markdown content", "error", err)
 					} else {
@@ -641,14 +643,15 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 			e.NumNotes.Add(1)
 
 			for _, resource := range note.Resources {
-				slog.Info("processing file",
-					slog.String("file", resource.ResourceAttributes.FileName),
-				)
+				slog.Debug("processing resource",
+					"resource", resource.ResourceAttributes.FileName,
+					"mime", resource.Mime,
+					"note", note.Title)
 
 				// Decode the base64 Resource.Data
 				decodedData, err := e.decodeBase64ResourceData(resource.Data)
 				if err != nil {
-					slog.Error(err.Error())
+					slog.Error("error when handling MIME type", "error", err)
 					continue
 				}
 
@@ -867,7 +870,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 							continue
 						}
 
-						id, err := paperless.UploadFile(e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
+						id, err := paperless.UploadFileWithContext(context.Background(), e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 						if err != nil {
 							slog.Error("failed to upload extracted file", "error", err)
 						} else {
@@ -906,7 +909,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 					_, err := e.SaveResourceAsFile(outputFolder, note, resource, decodedData)
 					if err != nil {
 						failedNoteChannel <- note
-						slog.Error(fmt.Sprintf("failed to save resource file: %v", err))
+						slog.Error("failed to save resource file", "error", err)
 						break
 					}
 					continue
@@ -1081,7 +1084,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 						"pdf_size", len(uploadData))
 				}
 
-				id, err := paperless.UploadFile(e.client, documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
+				id, err := paperless.UploadFileWithContext(context.Background(), e.client, documentTitle, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 				if err != nil {
 					failedNoteChannel <- note
 					slog.Error("failed to upload file", "error", err)
@@ -1124,8 +1127,8 @@ func FailedNoteCatcher(failedNoteChannel chan Note, failedNotes *[]Note) {
 }
 
 func RetryFeeder(failedNotes *[]Note, retryChannel chan Note) {
-	slog.Debug("starting RetryFeeder")
-	for _, note := range *failedNotes {
+	for i, note := range *failedNotes {
+		slog.Debug(fmt.Sprintf("feeding failed note %d to retry channel", i+1))
 		retryChannel <- note
 	}
 	close(retryChannel)

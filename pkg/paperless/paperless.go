@@ -2,6 +2,7 @@ package paperless
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"enex2paperless/internal/config"
 	"fmt"
@@ -320,8 +321,9 @@ func FormatCorrespondentName(name string) string {
 	return strings.Join(words, " ")
 }
 
-// UploadFile uploads a file to Paperless and returns the document ID
-func UploadFile(client *http.Client, title string, fileName string, mimeType string, data []byte, note interface{}, url string, taskTracker interface{}, failedNoteChannel interface{}) (int, error) {
+// UploadFileWithContext is the context-aware version of UploadFile
+// It takes a context parameter that can be used for logging with worker ID information
+func UploadFileWithContext(ctx context.Context, client *http.Client, title string, fileName string, mimeType string, data []byte, note interface{}, url string, taskTracker interface{}, failedNoteChannel interface{}) (int, error) {
 	// Create a new buffer and multipart writer for form
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -331,7 +333,7 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	// Cast the note interface to the expected type
 	noteObj, ok := note.(enexNote)
 	if !ok {
-		slog.Error("note is not of expected type")
+		slog.ErrorContext(ctx, "note is not of expected type")
 		// We don't try to directly cast the failedNoteChannel since that's causing the error
 		return 0, fmt.Errorf("note is not of expected type")
 	}
@@ -344,14 +346,14 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	if err != nil {
 		// Handle the error case for the failedNoteChannel
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error setting form fields", "error", err)
+		slog.ErrorContext(ctx, "error setting form fields", "error", err)
 		return 0, fmt.Errorf("error setting form fields: %v", err)
 	}
 
 	formattedCreatedDate, err := ConvertDateFormat(noteObj.GetCreated())
 	if err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error converting date format", "error", err)
+		slog.ErrorContext(ctx, "error converting date format", "error", err)
 		return 0, fmt.Errorf("error converting date format: %v", err)
 	}
 	_ = writer.WriteField("created", formattedCreatedDate)
@@ -360,7 +362,7 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	settings, err := config.GetConfig()
 	if err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("failed to get config", "error", err)
+		slog.ErrorContext(ctx, "failed to get config", "error", err)
 		return 0, fmt.Errorf("failed to get config: %v", err)
 	}
 
@@ -370,44 +372,54 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	var correspondentTagFound bool
 
 	if settings.CorrespondentTagPrefix != "" {
-		for _, tagName := range noteObj.GetTags() {
-			if strings.HasPrefix(tagName, settings.CorrespondentTagPrefix) {
-				if !correspondentTagFound {
-					// This is the first tag with the prefix, use it as correspondent
-					correspondentTagFound = true
+		// Find tags that match the correspondent prefix
+		// These will be used to set the correspondent field
+		correspondentTags := []string{}
 
-					// Remove the prefix and format the correspondent name
-					correspondentName := strings.TrimPrefix(tagName, settings.CorrespondentTagPrefix)
-					formattedName := FormatCorrespondentName(correspondentName)
+		// Get tags from the note
+		for _, tag := range noteObj.GetTags() {
+			if strings.HasPrefix(tag, settings.CorrespondentTagPrefix) {
+				// This tag starts with the correspondent prefix
+				correspondentTags = append(correspondentTags, tag)
+				correspondentTagFound = true
+			} else {
+				// This is a regular tag, add it to tags to process
+				tagsToProcess = append(tagsToProcess, tag)
+			}
+		}
 
-					// Get or create correspondent
-					id, err := GetCorrespondentID(formattedName)
+		if correspondentTagFound {
+			// Use the first correspondent tag found
+			if len(correspondentTags) > 0 {
+				correspondentTag := correspondentTags[0]
+
+				// Remove the prefix from the tag to get the correspondent name
+				correspondentName := strings.TrimPrefix(correspondentTag, settings.CorrespondentTagPrefix)
+
+				// Format the correspondent name properly
+				formattedName := FormatCorrespondentName(correspondentName)
+
+				// Look up correspondent ID
+				id, err := GetCorrespondentID(formattedName)
+				if err != nil {
+					sendToFailedChannel(failedNoteChannel, note)
+					slog.ErrorContext(ctx, "failed to check for correspondent", "error", err)
+					return 0, fmt.Errorf("failed to check for correspondent: %v", err)
+				}
+
+				if id == 0 {
+					slog.DebugContext(ctx, "creating correspondent", "correspondent", formattedName)
+					id, err = CreateCorrespondent(formattedName)
 					if err != nil {
 						sendToFailedChannel(failedNoteChannel, note)
-						slog.Error("failed to check for correspondent", "error", err)
-						return 0, fmt.Errorf("failed to check for correspondent: %v", err)
+						slog.ErrorContext(ctx, "couldn't create correspondent", "error", err)
+						return 0, fmt.Errorf("couldn't create correspondent: %v", err)
 					}
-
-					if id == 0 {
-						slog.Debug("creating correspondent", "correspondent", formattedName)
-						id, err = CreateCorrespondent(formattedName)
-						if err != nil {
-							sendToFailedChannel(failedNoteChannel, note)
-							slog.Error("couldn't create correspondent", "error", err)
-							return 0, fmt.Errorf("couldn't create correspondent: %v", err)
-						}
-					} else {
-						slog.Debug(fmt.Sprintf("found correspondent: %s with ID: %v", formattedName, id))
-					}
-
-					correspondentID = id
 				} else {
-					// This is a second or subsequent tag with the prefix, keep it as a tag
-					tagsToProcess = append(tagsToProcess, tagName)
+					slog.DebugContext(ctx, fmt.Sprintf("found correspondent: %s with ID: %v", formattedName, id))
 				}
-			} else {
-				// Regular tag without prefix
-				tagsToProcess = append(tagsToProcess, tagName)
+
+				correspondentID = id
 			}
 		}
 	} else {
@@ -420,7 +432,7 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 		err = writer.WriteField("correspondent", strconv.Itoa(correspondentID))
 		if err != nil {
 			sendToFailedChannel(failedNoteChannel, note)
-			slog.Error("couldn't write correspondent field", "error", err)
+			slog.ErrorContext(ctx, "couldn't write correspondent field", "error", err)
 			return 0, fmt.Errorf("couldn't write correspondent field: %v", err)
 		}
 	}
@@ -438,20 +450,20 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 		id, err := GetTagID(tagName)
 		if err != nil {
 			sendToFailedChannel(failedNoteChannel, note)
-			slog.Error("failed to check for tag", "error", err)
+			slog.ErrorContext(ctx, "failed to check for tag", "error", err)
 			return 0, fmt.Errorf("failed to check for tag: %v", err)
 		}
 
 		if id == 0 {
-			slog.Debug("creating tag", "tag", tagName)
+			slog.DebugContext(ctx, "creating tag", "tag", tagName)
 			id, err = CreateTag(tagName)
 			if err != nil {
 				sendToFailedChannel(failedNoteChannel, note)
-				slog.Error("couldn't create tag", "error", err)
+				slog.ErrorContext(ctx, "couldn't create tag", "error", err)
 				return 0, fmt.Errorf("couldn't create tag: %v", err)
 			}
 		} else {
-			slog.Debug(fmt.Sprintf("found tag: %s with ID: %v", tagName, id))
+			slog.DebugContext(ctx, fmt.Sprintf("found tag: %s with ID: %v", tagName, id))
 		}
 
 		tagIDs = append(tagIDs, id)
@@ -462,7 +474,7 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 		err = writer.WriteField("tags", strconv.Itoa(id))
 		if err != nil {
 			sendToFailedChannel(failedNoteChannel, note)
-			slog.Error("couldn't write fields", "error", err)
+			slog.ErrorContext(ctx, "couldn't write fields", "error", err)
 			return 0, fmt.Errorf("couldn't write fields: %v", err)
 		}
 	}
@@ -476,14 +488,14 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	part, err := writer.CreatePart(h)
 	if err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error creating multipart writer", "error", err)
+		slog.ErrorContext(ctx, "error creating multipart writer", "error", err)
 		return 0, fmt.Errorf("error creating multipart writer: %v", err)
 	}
 
 	_, err = io.Copy(part, bytes.NewReader(data))
 	if err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error writing file data", "error", err)
+		slog.ErrorContext(ctx, "error writing file data", "error", err)
 		return 0, fmt.Errorf("error writing file data: %v", err)
 	}
 
@@ -494,7 +506,7 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error creating new HTTP request", "error", err)
+		slog.ErrorContext(ctx, "error creating new HTTP request", "error", err)
 		return 0, fmt.Errorf("error creating new HTTP request: %v", err)
 	}
 
@@ -508,13 +520,13 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	// Send the request
-	slog.Debug("sending POST request", "file", fileName)
-	slog.Debug("request details", "method", req.Method, "url", req.URL.String(), "headers", req.Header)
+	slog.DebugContext(ctx, "sending POST request", "file", fileName)
+	slog.DebugContext(ctx, "request details", "method", req.Method, "url", req.URL.String(), "headers", req.Header)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error making POST request", "error", err)
+		slog.ErrorContext(ctx, "error making POST request", "error", err)
 		return 0, fmt.Errorf("error making POST request: %v", err)
 	}
 	defer resp.Body.Close()
@@ -524,8 +536,8 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(resp.Body)
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("non 200 status code received", "status code", resp.StatusCode)
-		slog.Error("response:", "body", buf.String())
+		slog.ErrorContext(ctx, "non 200 status code received", "status code", resp.StatusCode)
+		slog.ErrorContext(ctx, "response:", "body", buf.String())
 		return 0, fmt.Errorf("non 200 status code received (%d): %s", resp.StatusCode, buf.String())
 	}
 
@@ -533,13 +545,13 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	bodyBytes, err = io.ReadAll(resp.Body)
 	if err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error reading response body", "error", err)
+		slog.ErrorContext(ctx, "error reading response body", "error", err)
 		return 0, fmt.Errorf("error reading response body: %v", err)
 	}
 
 	// Try to unmarshal as a string first (UUID)
 	if err := json.Unmarshal(bodyBytes, &docIDStr); err == nil {
-		slog.Debug("Response is a string",
+		slog.DebugContext(ctx, "Response is a string",
 			"id", docIDStr,
 			"title", title,
 			"filename", fileName)
@@ -558,7 +570,7 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 
 			// Try to add the task to the tracker using a safer approach
 			if err := addTaskToTracker(taskTracker, taskInfo); err != nil {
-				slog.Error("failed to save task info", "error", err)
+				slog.ErrorContext(ctx, "failed to save task info", "error", err)
 				return 0, fmt.Errorf("failed to save task info: %v", err)
 			}
 		}
@@ -571,12 +583,12 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	var docDetails map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &docDetails); err != nil {
 		sendToFailedChannel(failedNoteChannel, note)
-		slog.Error("error decoding document details", "error", err)
+		slog.ErrorContext(ctx, "error decoding document details", "error", err)
 		return 0, fmt.Errorf("error decoding document details: %v", err)
 	}
 
 	if id, ok := docDetails["id"].(float64); ok {
-		slog.Debug("Found document ID in response",
+		slog.DebugContext(ctx, "Found document ID in response",
 			"id", id,
 			"title", title)
 		// We can't access e.Uploads here anymore
@@ -584,10 +596,16 @@ func UploadFile(client *http.Client, title string, fileName string, mimeType str
 	}
 
 	sendToFailedChannel(failedNoteChannel, note)
-	slog.Error("no document ID found in response",
+	slog.ErrorContext(ctx, "no document ID found in response",
 		"response", docDetails,
 		"title", title)
 	return 0, fmt.Errorf("no document ID found in response")
+}
+
+// UploadFile uploads a file to Paperless and returns the document ID
+func UploadFile(client *http.Client, title string, fileName string, mimeType string, data []byte, note interface{}, url string, taskTracker interface{}, failedNoteChannel interface{}) (int, error) {
+	// Call the context-aware version with a background context
+	return UploadFileWithContext(context.Background(), client, title, fileName, mimeType, data, note, url, taskTracker, failedNoteChannel)
 }
 
 // Helper function to safely send to the failed channel
@@ -715,15 +733,15 @@ type enexNote interface {
 
 // TaskInfo represents information about a document upload task and its linking data
 type TaskInfo struct {
-	TaskID        string   `json:"task_id"`
-	Title         string   `json:"title"`
-	FileName      string   `json:"file_name"`
-	NoteTitle     string   `json:"note_title"`
-	DocumentID    int      `json:"document_id,omitempty"`
-	Status        string   `json:"status"`
-	RelatedDocIDs []int    `json:"related_doc_ids,omitempty"`
-	DateCreated   string   `json:"date_created"`
-	DateDone      string   `json:"date_done,omitempty"`
+	TaskID        string `json:"task_id"`
+	Title         string `json:"title"`
+	FileName      string `json:"file_name"`
+	NoteTitle     string `json:"note_title"`
+	DocumentID    int    `json:"document_id,omitempty"`
+	Status        string `json:"status"`
+	RelatedDocIDs []int  `json:"related_doc_ids,omitempty"`
+	DateCreated   string `json:"date_created"`
+	DateDone      string `json:"date_done,omitempty"`
 }
 
 // TaskTracker interface defines methods needed for task tracking

@@ -9,11 +9,51 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/muesli/termenv"
 )
+
+// goroutineID gets the unique ID of the current goroutine
+func goroutineID() uint64 {
+	// This is a hack, but it works
+	b := make([]byte, 64)
+	b = b[:runtime.Stack(b, false)]
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	b = b[:bytes.IndexByte(b, ' ')]
+	n, _ := strconv.ParseUint(string(b), 10, 64)
+	return n
+}
+
+// GlobalWorkerRegistry keeps track of worker IDs by goroutine ID
+var GlobalWorkerRegistry = struct {
+	sync.RWMutex
+	workers map[uint64]int
+}{
+	workers: make(map[uint64]int),
+}
+
+// RegisterWorker registers a worker ID for the current goroutine
+func RegisterWorker(workerID int) {
+	goroutine := goroutineID()
+	GlobalWorkerRegistry.Lock()
+	defer GlobalWorkerRegistry.Unlock()
+	GlobalWorkerRegistry.workers[goroutine] = workerID
+}
+
+// GetWorkerID gets the worker ID for the current goroutine, or 0 if not found
+func GetWorkerID() int {
+	goroutine := goroutineID()
+	GlobalWorkerRegistry.RLock()
+	defer GlobalWorkerRegistry.RUnlock()
+	if id, ok := GlobalWorkerRegistry.workers[goroutine]; ok {
+		return id
+	}
+	return 0
+}
 
 type Handler struct {
 	h               slog.Handler
@@ -26,6 +66,8 @@ type Handler struct {
 	normalLogFile   *os.File
 	debugLogFile    *os.File
 	verbose         bool // Controls whether debug messages are shown in the console
+	// Add a mutex specifically for file writing to ensure log entries don't get interleaved
+	fileMutex *sync.Mutex
 }
 
 func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -45,6 +87,7 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		normalLogFile:   h.normalLogFile,
 		debugLogFile:    h.debugLogFile,
 		verbose:         h.verbose,
+		fileMutex:       h.fileMutex,
 	}
 }
 
@@ -60,6 +103,7 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 		normalLogFile:   h.normalLogFile,
 		debugLogFile:    h.debugLogFile,
 		verbose:         h.verbose,
+		fileMutex:       h.fileMutex,
 	}
 }
 
@@ -69,6 +113,10 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if r.Level == slog.LevelDebug && !h.verbose {
 		shouldLogToConsole = false
 	}
+
+	// Get the worker ID for the current goroutine
+	workerID := GetWorkerID()
+	workerIDStr := fmt.Sprintf("[W%2d] ", workerID)
 
 	// prepare log level string
 	level := fmt.Sprintf("%5s", r.Level.String())
@@ -94,6 +142,11 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 
 	attrStr := ""
 	if attrs != nil {
+		// Add worker ID as an attribute for debugging
+		if workerID != 0 {
+			attrs["worker"] = workerID
+		}
+
 		bytes, err := json.Marshal(attrs)
 		if err != nil {
 			return fmt.Errorf("error when marshaling attrs: %w", err)
@@ -105,24 +158,25 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		}
 	}
 
-	// prepare time string
-	timeStr := r.Time.Format("[15:04:05.000]")
+	// prepare time string with microsecond precision for better ordering
+	timeStr := r.Time.Format("[15:04:05.000000]")
 	if !h.nocolor {
 		timeStr = h.output.String(timeStr).Foreground(p.Color("11")).String()
 	}
 
 	// print log message to terminal (if it should be shown)
 	if shouldLogToConsole {
-		fmt.Printf("%s [%s] %s %s\n",
+		fmt.Printf("%s [%s] %s%s %s\n",
 			timeStr,
 			level,
+			workerIDStr,
 			r.Message,
 			attrStr,
 		)
 	}
 
 	// Prepare plain text for file logging (without colors)
-	plainTimeStr := r.Time.Format("[15:04:05.000]")
+	plainTimeStr := r.Time.Format("[15:04:05.000000]")
 	plainLevel := fmt.Sprintf("[%5s]", r.Level.String())
 	plainAttrStr := ""
 	if attrs != nil {
@@ -134,12 +188,17 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	// Format log entry for file
-	logEntry := fmt.Sprintf("%s %s %s %s\n",
+	logEntry := fmt.Sprintf("%s %s %s%s %s\n",
 		plainTimeStr,
 		plainLevel,
+		workerIDStr,
 		r.Message,
 		plainAttrStr,
 	)
+
+	// Use mutex to ensure log entries don't get interleaved in the files
+	h.fileMutex.Lock()
+	defer h.fileMutex.Unlock()
 
 	// Write to the normal log file (info, warn, error only)
 	if r.Level >= slog.LevelInfo && h.normalLogWriter != nil {
@@ -231,6 +290,7 @@ func NewHandler(opts *slog.HandlerOptions, nocolor bool, verbose bool) *Handler 
 		normalLogFile:   normalLogFile,
 		debugLogFile:    debugLogFile,
 		verbose:         verbose,
+		fileMutex:       &sync.Mutex{},
 	}
 
 	// Log a debug message to verify debug logging is working
@@ -284,9 +344,11 @@ func suppressDefaults(
 	next func([]string, slog.Attr) slog.Attr,
 ) func([]string, slog.Attr) slog.Attr {
 	return func(groups []string, a slog.Attr) slog.Attr {
+		// Suppress default slog fields and our worker_id field
 		if a.Key == slog.TimeKey ||
 			a.Key == slog.LevelKey ||
-			a.Key == slog.MessageKey {
+			a.Key == slog.MessageKey ||
+			a.Key == "worker_id" {
 			return slog.Attr{}
 		}
 		if next == nil {
@@ -322,4 +384,9 @@ func (h *Handler) computeAttrs(
 	}
 
 	return attrs, nil
+}
+
+// SetWorkerLogger sets the worker ID for the current goroutine
+func SetWorkerLogger(workerID int) {
+	RegisterWorker(workerID)
 }

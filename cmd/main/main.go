@@ -261,6 +261,9 @@ func main() {
 }
 
 func importENEX(cmd *cobra.Command, args []string) {
+	// Register main process with ID 0
+	logging.SetWorkerLogger(0)
+
 	slog.Debug("starting importENEX")
 	settings, _ := config.GetConfig()
 
@@ -303,17 +306,25 @@ func importENEX(cmd *cobra.Command, args []string) {
 	// Failure Catcher
 	var failedNotes []enex.Note
 	go func() {
+		// Register failed note catcher4
+		logging.SetWorkerLogger(0)
+		slog.Debug("Starting failed note catcher")
 		enex.FailedNoteCatcher(failedNoteChannel, &failedNotes)
+		slog.Debug("Failed note catcher finished")
 		failedNoteSignal <- true
 	}()
 
 	// Producer
 	go func() {
+		// Register producer1
+		logging.SetWorkerLogger(0)
+		slog.Info("Starting ENEX file processing", "file", filePath)
 		err := inputFile.ReadFromFile(filePath, noteChannel)
 		if err != nil {
 			slog.Error("failed to read from file", "error", err)
 			os.Exit(1)
 		}
+		slog.Info("Finished reading ENEX file")
 	}()
 
 	// Consumers
@@ -321,16 +332,22 @@ func importENEX(cmd *cobra.Command, args []string) {
 	wg.Add(howMany)
 
 	for i := 0; i < howMany; i++ {
-		go func() {
+		workerID := i + 1 // Using 1-based worker IDs for readability
+
+		go func(id int) {
+			// Register worker with its ID
+			logging.SetWorkerLogger(id)
+			slog.Info("Starting worker")
+
 			err := inputFile.UploadFromNoteChannel(noteChannel, failedNoteChannel, settings.OutputFolder)
-			// inputFile.PrintNoteInfo(noteChannel)
 			if err != nil {
 				slog.Error("failed to upload resources", "error", err)
 				os.Exit(1)
 			}
 
+			slog.Debug("Worker finished")
 			wg.Done()
-		}()
+		}(workerID)
 	}
 	slog.Debug("waiting for Consumers (WaitGroup)")
 	wg.Wait()
@@ -366,24 +383,37 @@ func importENEX(cmd *cobra.Command, args []string) {
 
 		// this feeds the failedNotes slice into the failedNoteChannel
 		go func() {
+			// Register retry failed note catcher3
+			logging.SetWorkerLogger(0)
+			slog.Debug("Starting retry failed note catcher")
 			enex.FailedNoteCatcher(failedNoteChannel, &failedThisCycle)
+			slog.Debug("Retry failed note catcher finished")
 			failedNoteSignal <- true
 		}()
 
 		// this feeds the failedNotes into the Retry Channel
 		retryChannel := make(chan enex.Note)
-		go enex.RetryFeeder(&failedNotes, retryChannel)
+		go func() {
+			// Register retry feeder2
+			logging.SetWorkerLogger(0)
+			slog.Debug("Starting retry feeder")
+			enex.RetryFeeder(&failedNotes, retryChannel)
+			slog.Debug("Retry feeder finished")
+		}()
 
 		// this works on the retry channel
 		wg.Add(1)
 		go func() {
-			var err error
-			err = inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, settings.OutputFolder)
-			// inputFile.PrintNoteInfo(noteChannel)
+			// Register retry worker with ID 999
+			logging.SetWorkerLogger(999)
+			slog.Info("Starting retry worker")
+			err := inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, settings.OutputFolder)
 			if err != nil {
 				slog.Error("failed to upload resources", "error", err)
 				os.Exit(1)
 			}
+
+			slog.Debug("Retry worker finished")
 			wg.Done()
 		}()
 		wg.Wait()
