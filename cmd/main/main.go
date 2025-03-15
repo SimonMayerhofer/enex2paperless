@@ -409,6 +409,9 @@ func importENEX(cmd *cobra.Command, args []string) {
 		// Reset the overall counter before processing
 		inputFile.CurrentNoteAll.Store(0)
 
+		// Collect all failed notes from all files
+		var allFailedNotes []enex.Note
+
 		// Process each file sequentially
 		for _, filePath := range enexFiles {
 			slog.Info(":::::::::::::::::: Processing ENEX file ::::::::::::::::::", "file", filePath)
@@ -428,8 +431,11 @@ func importENEX(cmd *cobra.Command, args []string) {
 				slog.Info("Note Tags", "tags", append(settings.AdditionalTags, tagName))
 			}
 
-			// Process the file
-			processEnexFile(cmd, inputFile, filePath, settings)
+			// Process the file and collect failed notes
+			failedNotes := processEnexFile(cmd, inputFile, filePath, settings)
+
+			// Add failed notes from this file to the collection
+			allFailedNotes = append(allFailedNotes, failedNotes...)
 		}
 
 		// Process pending tasks and link documents after all files are processed
@@ -437,6 +443,12 @@ func importENEX(cmd *cobra.Command, args []string) {
 		slog.Info("Processing pending tasks and linking documents for all files")
 		if err := inputFile.ProcessPendingTasks(); err != nil {
 			slog.Error("failed to process pending tasks and link documents", "error", err)
+		}
+
+		// Process retries for all failed notes from all files
+		if len(allFailedNotes) > 0 {
+			slog.Info("Processing retries for all failed notes", "count", len(allFailedNotes))
+			processRetries(inputFile, allFailedNotes, settings.OutputFolder, totalNotesAcrossFiles)
 		}
 
 		slog.Info("All ENEX files processed successfully")
@@ -478,14 +490,20 @@ func importENEX(cmd *cobra.Command, args []string) {
 		inputFile.CurrentNoteAll.Store(0)
 	}
 
-	// Process the single file
-	processEnexFile(cmd, inputFile, filePath, settings)
+	// Process the single file and collect failed notes
+	failedNotes := processEnexFile(cmd, inputFile, filePath, settings)
 
 	// Process pending tasks and link documents
 	logging.SetWorkerLogger(0) // Use main process ID for this
 	slog.Info("Processing pending tasks and linking documents")
 	if err := inputFile.ProcessPendingTasks(); err != nil {
 		slog.Error("failed to process pending tasks and link documents", "error", err)
+	}
+
+	// Process retries for failed notes
+	if len(failedNotes) > 0 {
+		slog.Info("Processing retries for failed notes", "count", len(failedNotes))
+		processRetries(inputFile, failedNotes, settings.OutputFolder, totalNotes)
 	}
 
 	slog.Info("ENEX processing done")
@@ -515,7 +533,7 @@ func findEnexFiles(dirPath string) ([]string, error) {
 }
 
 // processEnexFile processes a single ENEX file
-func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath string, settings config.Config) {
+func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath string, settings config.Config) []enex.Note {
 	// Count total notes in the file
 	totalNotes, err := inputFile.CountNotes(filePath)
 	if err != nil {
@@ -598,6 +616,19 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 		slog.Int("totalFiles", int(inputFile.Uploads.Load())),
 	)
 
+	// Return failed notes instead of processing them immediately
+	return failedNotes
+}
+
+// processRetries processes all failed notes from all files
+func processRetries(inputFile *enex.EnexFile, allFailedNotes []enex.Note, outputFolder string, totalNotes int) {
+	// If no failed notes, return early
+	if len(allFailedNotes) == 0 {
+		return
+	}
+
+	failedNotes := allFailedNotes
+
 	for {
 		// if we still have failedNotes in this iteration, keep going
 		if len(failedNotes) == 0 {
@@ -616,7 +647,8 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 		failedThisCycle := []enex.Note{}
 
 		// reset failedNoteChannel
-		failedNoteChannel = make(chan enex.Note)
+		failedNoteChannel := make(chan enex.Note)
+		failedNoteSignal := make(chan bool)
 
 		// this feeds the failedNotes slice into the failedNoteChannel
 		go func() {
@@ -639,12 +671,13 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 		}()
 
 		// this works on the retry channel
+		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
 			// Register retry worker with ID 999
 			logging.SetWorkerLogger(999)
 			slog.Info("Starting retry worker")
-			err := inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, settings.OutputFolder, totalNotes)
+			err := inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, outputFolder, totalNotes)
 			if err != nil {
 				slog.Error("failed to upload resources", "error", err)
 				os.Exit(1)
