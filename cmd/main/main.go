@@ -7,10 +7,12 @@ import (
 	"enex2paperless/pkg/enex"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -21,7 +23,18 @@ func main() {
 		Use:   "enex2paperless [file path]",
 		Short: "ENEX to Paperless-NGX parser",
 		Long:  `An ENEX file parser for Paperless-NGX. https://github.com/kevinzehnder/enex2paperless`,
-		Args:  cobra.MinimumNArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			// Allow running without arguments when using process-tasks flag
+			processTasksOnly, _ := cmd.Flags().GetBool("process-tasks")
+			if processTasksOnly {
+				return nil
+			}
+			// Otherwise require at least one argument (the ENEX file)
+			if len(args) < 1 {
+				return fmt.Errorf("requires at least one argument (ENEX file path)")
+			}
+			return nil
+		},
 		PreRun: func(cmd *cobra.Command, args []string) {
 			// this block will execute after flag parsing and before the main Run
 
@@ -74,6 +87,13 @@ func main() {
 				config.SetOutputFolder(outputfolder)
 			}
 
+			// Check if we're only processing tasks
+			processTasksOnly, _ := cmd.Flags().GetBool("process-tasks")
+			if processTasksOnly && len(args) == 0 {
+				// Skip argument processing when in process-tasks-only mode with no arguments
+				return
+			}
+
 			// Set additional tags if provided
 			tags, err := cmd.Flags().GetStringSlice("tags")
 			if err != nil {
@@ -94,8 +114,8 @@ func main() {
 				config.SetUseFilenameAsTag(useFilenameAsTag)
 			}
 
-			// Check both the flag and the config setting
-			if useFilenameAsTag || currentSettings.UseFilenameAsTag {
+			// Check both the flag and the config setting and ensure we have arguments
+			if (useFilenameAsTag || currentSettings.UseFilenameAsTag) && len(args) > 0 {
 				// Extract filename without path and extension
 				baseName := filepath.Base(args[0])
 				tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
@@ -204,6 +224,8 @@ func main() {
 			if cmd.Flags().Changed("excluded-outputfolder") {
 				config.SetExcludedOutputFolder(excludedOutput)
 			}
+
+			// The process-tasks flag is already defined at the root level, no need to define it again here
 		},
 
 		// run main function
@@ -252,6 +274,9 @@ func main() {
 	var excludedOutputFolder string
 	rootCmd.PersistentFlags().StringVarP(&excludedOutputFolder, "excluded-outputfolder", "e", "", "Folder for saving excluded files that don't match allowed file types")
 
+	var processTasksOnly bool
+	rootCmd.PersistentFlags().BoolVar(&processTasksOnly, "process-tasks", false, "Only process pending tasks and link documents (skip file processing)")
+
 	// run root command
 	err := rootCmd.Execute()
 	if err != nil {
@@ -267,6 +292,34 @@ func importENEX(cmd *cobra.Command, args []string) {
 	slog.Debug("starting importENEX")
 	settings, _ := config.GetConfig()
 
+	// Check if we should only process tasks
+	processTasksOnly, _ := cmd.Flags().GetBool("process-tasks")
+	if processTasksOnly {
+		slog.Info("Running in process-tasks-only mode")
+
+		// Create EnexFile with task tracker
+		inputFile := enex.NewEnexFile()
+
+		// Ensure HTTP client is initialized
+		if inputFile.Client() == nil {
+			inputFile.SetClient(&http.Client{
+				Timeout: time.Second * 30, // Use a longer timeout for task processing
+			})
+			slog.Debug("HTTP client initialized")
+		}
+
+		// Process pending tasks
+		slog.Info("Processing pending tasks and linking documents")
+		if err := inputFile.ProcessPendingTasks(); err != nil {
+			slog.Error("failed to process pending tasks and link documents", "error", err)
+			os.Exit(1)
+		}
+
+		slog.Info("Task processing completed successfully")
+		return
+	}
+
+	// Regular ENEX processing mode
 	if settings.OutputFolder != "" {
 		slog.Info(fmt.Sprintf("Output to local storage is enabled. Target is: %v", settings.OutputFolder))
 	}
@@ -276,7 +329,7 @@ func importENEX(cmd *cobra.Command, args []string) {
 	}
 
 	// Check if we need to add the filename as a tag
-	if settings.UseFilenameAsTag {
+	if settings.UseFilenameAsTag && len(args) > 0 {
 		// Extract filename without path and extension
 		baseName := filepath.Base(args[0])
 		tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
@@ -294,7 +347,12 @@ func importENEX(cmd *cobra.Command, args []string) {
 		howMany = 1 // Default to 1 if not set in config
 	}
 
-	// prepare input file
+	// Ensure we have a file to process
+	if len(args) == 0 {
+		slog.Error("No ENEX file specified")
+		os.Exit(1)
+	}
+
 	filePath := args[0]
 	inputFile := enex.NewEnexFile()
 

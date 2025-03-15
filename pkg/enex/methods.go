@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -576,16 +577,18 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 		slog.Info("output folder specified, skipping API calls and task processing", "folder", outputFolder)
 	} else {
 		// Initialize task tracker only if linking is enabled
-		if settings.LinkFieldID > 0 {
-			e.taskTracker = paperless.NewTaskTracker("tasks.json")
-			e.taskTracker.Fs = e.Fs
-			if err := e.taskTracker.Load(); err != nil {
-				slog.Error("failed to load tasks", "error", err)
-				return fmt.Errorf("failed to load tasks: %v", err)
-			}
-		} else {
-			slog.Info("skipping task tracking - no link field ID specified")
+		tracker, err := paperless.InitTaskTracker(paperless.TaskTrackerOptions{
+			File:           "tasks.json",
+			Fs:             e.Fs,
+			CheckLinkField: true,
+		})
+
+		if err != nil {
+			slog.Error("failed to initialize task tracker", "error", err)
+			return fmt.Errorf("failed to initialize task tracker: %v", err)
 		}
+
+		e.taskTracker = tracker
 	}
 
 	url := fmt.Sprintf("%s/api/documents/post_document/", settings.PaperlessAPI)
@@ -1107,8 +1110,33 @@ func (e *EnexFile) ProcessPendingTasks() error {
 		return fmt.Errorf("error getting config: %v", err)
 	}
 
-	// Only if we're not using an output folder
-	if settings.OutputFolder == "" && settings.LinkFieldID > 0 {
+	// Ensure HTTP client is initialized
+	if e.client == nil {
+		e.client = &http.Client{
+			Timeout: time.Second * 30, // Use a longer timeout for task processing
+		}
+		slog.Debug("HTTP client initialized")
+	}
+
+	// Check if task tracker is initialized
+	if e.taskTracker == nil {
+		slog.Debug("Task tracker not initialized, initializing now")
+
+		// Initialize with options
+		tracker, err := paperless.InitTaskTracker(paperless.TaskTrackerOptions{
+			File:           "tasks.json",
+			Fs:             e.Fs,
+			CheckLinkField: true,
+		})
+
+		if err != nil {
+			return fmt.Errorf("failed to initialize task tracker: %v", err)
+		}
+		e.taskTracker = tracker
+	}
+
+	// Only if we're not using an output folder and we have a task tracker
+	if settings.OutputFolder == "" && settings.LinkFieldID > 0 && e.taskTracker != nil {
 		slog.Info("processing all pending tasks")
 		if err := paperless.ProcessPendingTasks(e.taskTracker, e.client); err != nil {
 			slog.Error("failed to process pending tasks", "error", err)
@@ -1143,4 +1171,14 @@ func RetryFeeder(failedNotes *[]Note, retryChannel chan Note) {
 		retryChannel <- note
 	}
 	close(retryChannel)
+}
+
+// Client returns the HTTP client used by this EnexFile
+func (e *EnexFile) Client() *http.Client {
+	return e.client
+}
+
+// SetClient sets the HTTP client for this EnexFile
+func (e *EnexFile) SetClient(client *http.Client) {
+	e.client = client
 }

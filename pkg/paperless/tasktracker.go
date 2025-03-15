@@ -582,3 +582,54 @@ func removeInt(slice []int, s int) []int {
 	}
 	return slice
 }
+
+// TaskTrackerOptions contains options for initializing a task tracker
+type TaskTrackerOptions struct {
+	// File is the path to the tasks file
+	File string
+	// Fs is the filesystem to use
+	Fs afero.Fs
+	// CheckLinkField determines whether to check if linking is enabled in settings
+	CheckLinkField bool
+}
+
+// InitTaskTracker creates and initializes a task tracker with the given options
+func InitTaskTracker(opts TaskTrackerOptions) (*TaskTrackerImpl, error) {
+	// If we need to check if linking is enabled
+	if opts.CheckLinkField {
+		settings, err := config.GetConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get config: %v", err)
+		}
+
+		// Only initialize if linking is enabled
+		if settings.LinkFieldID <= 0 {
+			slog.Info("skipping task tracking - no link field ID specified")
+			return nil, nil
+		}
+	}
+
+	// Use default file name if not specified
+	fileName := opts.File
+	if fileName == "" {
+		fileName = "tasks.json"
+	}
+
+	// Create the task tracker
+	tracker := NewTaskTracker(fileName)
+
+	// Use provided filesystem or create a new one
+	if opts.Fs != nil {
+		tracker.Fs = opts.Fs
+	} else {
+		tracker.Fs = afero.NewOsFs()
+	}
+
+	// Load tasks from file
+	if err := tracker.Load(); err != nil {
+		return nil, fmt.Errorf("failed to load tasks: %v", err)
+	}
+
+	slog.Info("Task tracker initialized successfully", "file", tracker.File)
+	return tracker, nil
+}

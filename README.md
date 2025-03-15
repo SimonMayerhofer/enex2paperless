@@ -289,6 +289,14 @@ This will:
 3. The links will be stored in the specified custom field
 4. Works for both individual files and files extracted from zip archives
 
+You can also process pending tasks and link documents without processing any ENEX files using the `--process-tasks` flag:
+
+```shell
+enex2paperless.exe --process-tasks
+```
+
+This is useful when you've previously uploaded documents and cancelled the document linking.
+
 ### Markdown Conversion
 
 You can convert the content of your Evernote notes to Markdown format using the `-m` or `--convert-markdown` flag:
