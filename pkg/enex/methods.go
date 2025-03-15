@@ -563,7 +563,7 @@ func (e *EnexFile) convertIWorkDataToPDF(
 }
 
 // UploadFromNoteChannel processes notes from a channel and uploads them to Paperless-NGX or saves to a folder
-func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChannel chan Note, outputFolder string) error {
+func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChannel chan<- Note, outputFolder string) error {
 	slog.Debug("starting UploadFromNoteChannel")
 	settings, err := config.GetConfig()
 	if err != nil {
@@ -1096,20 +1096,32 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel chan Note, failedNoteChanne
 		}
 	}
 
-	// Process all pending tasks after all uploads are complete
+	return nil // no error
+}
+
+// ProcessPendingTasks processes all pending tasks and links documents
+// This should be called only once after all workers have finished
+func (e *EnexFile) ProcessPendingTasks() error {
+	settings, err := config.GetConfig()
+	if err != nil {
+		return fmt.Errorf("error getting config: %v", err)
+	}
+
 	// Only if we're not using an output folder
-	if outputFolder == "" && settings.LinkFieldID > 0 {
+	if settings.OutputFolder == "" && settings.LinkFieldID > 0 {
 		slog.Info("processing all pending tasks")
 		if err := paperless.ProcessPendingTasks(e.taskTracker, e.client); err != nil {
 			slog.Error("failed to process pending tasks", "error", err)
+			return err
 		}
 
 		// Link all documents after all tasks are processed
 		slog.Info("linking all documents")
 		if err := paperless.LinkDocumentsFromTasks(e.taskTracker, e.client); err != nil {
 			slog.Error("failed to link documents", "error", err)
+			return err
 		}
-	} else if outputFolder != "" {
+	} else if settings.OutputFolder != "" {
 		slog.Info("skipping task processing and document linking - using output folder")
 	} else {
 		slog.Info("skipping task processing and document linking - no link field ID specified")

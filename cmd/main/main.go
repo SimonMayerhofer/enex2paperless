@@ -359,6 +359,14 @@ func importENEX(cmd *cobra.Command, args []string) {
 	slog.Debug("waiting for FailedNoteCatcher")
 	<-failedNoteSignal
 
+	// Process pending tasks and link documents after all workers have finished
+	// This ensures only one process is handling the task tracking
+	logging.SetWorkerLogger(0) // Use main process ID for this
+	slog.Info("Processing pending tasks and linking documents")
+	if err := inputFile.ProcessPendingTasks(); err != nil {
+		slog.Error("failed to process pending tasks and link documents", "error", err)
+	}
+
 	// log results
 	slog.Info("ENEX processing done",
 		slog.Int("numberOfNotes", int(inputFile.NumNotes.Load())),
@@ -427,6 +435,13 @@ func importENEX(cmd *cobra.Command, args []string) {
 
 		// we move the notes that failed this cycle into the failedNotes variable
 		failedNotes = failedThisCycle
+	}
+
+	// Process any pending tasks from retries
+	logging.SetWorkerLogger(0) // Use main process ID for this
+	slog.Info("Processing pending tasks from retries")
+	if err := inputFile.ProcessPendingTasks(); err != nil {
+		slog.Error("failed to process pending tasks and link documents from retries", "error", err)
 	}
 
 	slog.Info("all notes processed successfully")
