@@ -455,7 +455,7 @@ func (e *EnexFile) SaveResourceAsFile(outputFolder string, note Note, resource R
 		helpers.SetFileTimestamps(e.Fs, fileName, fileTime, "file")
 	}
 
-	slog.Info("saved file", "path", fileName)
+	slog.Debug("saved file", "path", fileName)
 	e.Uploads.Add(1)
 	return fileName, nil
 }
@@ -563,7 +563,7 @@ func (e *EnexFile) convertIWorkDataToPDF(
 }
 
 // UploadFromNoteChannel processes notes from a channel and uploads them to Paperless-NGX or saves to a folder
-func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChannel chan<- Note, outputFolder string) error {
+func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChannel chan<- Note, outputFolder string, totalNotes int) error {
 	slog.Debug("starting UploadFromNoteChannel")
 	settings, err := config.GetConfig()
 	if err != nil {
@@ -593,6 +593,22 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 	url := fmt.Sprintf("%s/api/documents/post_document/", settings.PaperlessAPI)
 
 	for note := range noteChannel {
+		// Increment the atomic counters and get the new values
+		noteNumber := e.CurrentNote.Add(1)
+		noteNumberAll := e.CurrentNoteAll.Add(1)
+		totalNotesAll := e.TotalNotesAll.Load()
+
+		// Log with both individual file progress and overall progress
+		if totalNotesAll > 0 {
+			slog.Info(fmt.Sprintf("========= Processing note %d/%d (total: %d/%d) \"%s\" =========",
+				noteNumber, totalNotes, noteNumberAll, totalNotesAll, note.Title),
+				"tags", note.Tags)
+		} else {
+			slog.Info(fmt.Sprintf("========= Processing note %d/%d \"%s\" =========",
+				noteNumber, totalNotes, note.Title),
+				"tags", note.Tags)
+		}
+
 		// Handle markdown content if markdown conversion is enabled
 		if settings.ConvertMarkdown && note.Content != "" {
 			// Convert HTML content to markdown
@@ -647,11 +663,9 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 					mdNote.Tags = append(mdNote.Tags, "markdown")
 
 					// Upload the markdown content as a new document
-					id, err := paperless.UploadFile(e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), mdNote, url, e.taskTracker, failedNoteChannel)
+					_, err := paperless.UploadFile(e.client, documentTitle, mdFileName, "text/markdown", []byte(mdContent), mdNote, url, e.taskTracker, failedNoteChannel)
 					if err != nil {
 						slog.Error("failed to upload markdown content", "error", err)
-					} else {
-						slog.Info("uploaded note content as markdown", "document_id", id)
 					}
 				}
 			} else {
@@ -694,9 +708,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 					if err := e.Fs.MkdirAll(nonameFolder, 0755); err != nil {
 						slog.Error("failed to create noname directory", "error", err)
 					} else {
-						slog.Info("saving file with no original filename to noname folder",
-							"title", note.Title,
-							"folder", nonameFolder)
+						slog.Debug("saving file with no original filename to noname folder", "title", note.Title)
 
 						// Save to the noname folder and continue to next resource
 						_, err := e.SaveResourceAsFile(nonameFolder, note, resource, decodedData)
@@ -721,7 +733,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 
 					// Check if we should save excluded files
 					if settings.ExcludedOutputFolder != "" {
-						slog.Info("saving excluded file to excluded output folder",
+						slog.Debug("saving excluded file to excluded output folder",
 							"filename", resource.ResourceAttributes.FileName,
 							"filetype", resource.Mime,
 							"folder", settings.ExcludedOutputFolder)
@@ -755,9 +767,9 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 					}
 
 					// Debug output for zip contents
-					slog.Info("zip file contents:", "total_files", len(zipReader.File))
+					slog.Debug("zip file contents:", "total_files", len(zipReader.File))
 					for _, file := range zipReader.File {
-						slog.Info("zip entry:",
+						slog.Debug("zip entry:",
 							"name", file.Name,
 							"size", file.UncompressedSize64,
 							"compressed_size", file.CompressedSize64,
@@ -1190,4 +1202,42 @@ func (e *EnexFile) Client() *http.Client {
 // SetClient sets the HTTP client for this EnexFile
 func (e *EnexFile) SetClient(client *http.Client) {
 	e.client = client
+}
+
+// CountNotes counts the total number of notes in an ENEX file without processing them
+func (e *EnexFile) CountNotes(filePath string) (int, error) {
+	slog.Debug(fmt.Sprintf("counting notes in file: %v", filePath))
+	file, err := e.Fs.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("error opening file: %w", err)
+	}
+	defer file.Close()
+
+	decoder := xml.NewDecoder(file)
+	decoder.Strict = false
+
+	count := 0
+	for {
+		t, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Log this error but continue counting
+			slog.Error("XML parsing error while counting notes", "error", err)
+			break
+		}
+		switch se := t.(type) {
+		case xml.StartElement:
+			if se.Name.Local == "note" {
+				count++
+				// Skip to the end of this note element to avoid parsing its contents
+				if err := decoder.Skip(); err != nil {
+					slog.Error("error skipping note element", "error", err)
+				}
+			}
+		}
+	}
+	slog.Debug("note count in ENEX file", "total_notes", count, "file", filePath)
+	return count, nil
 }

@@ -15,8 +15,11 @@ type EnexFile struct {
 	Fs                afero.Fs
 	client            *http.Client
 	NumNotes, Uploads atomic.Uint32
-	documentIDs       map[string][]int // Maps note title to list of document IDs
-	taskTracker       *paperless.TaskTrackerImpl     // Tracks document upload tasks
+	CurrentNote       atomic.Uint32              // Counter for the current note being processed in current file
+	TotalNotesAll     atomic.Uint32              // Counter for total notes across all files
+	CurrentNoteAll    atomic.Uint32              // Counter for current note across all files
+	documentIDs       map[string][]int           // Maps note title to list of document IDs
+	taskTracker       *paperless.TaskTrackerImpl // Tracks document upload tasks
 }
 
 func NewEnexFile() *EnexFile {

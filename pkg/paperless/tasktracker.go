@@ -604,7 +604,7 @@ func InitTaskTracker(opts TaskTrackerOptions) (*TaskTrackerImpl, error) {
 
 		// Only initialize if linking is enabled
 		if settings.LinkFieldID <= 0 {
-			slog.Info("skipping task tracking - no link field ID specified")
+			slog.Info("skipping task tracking / document linking - no link field ID specified")
 			return nil, nil
 		}
 	}
@@ -630,6 +630,6 @@ func InitTaskTracker(opts TaskTrackerOptions) (*TaskTrackerImpl, error) {
 		return nil, fmt.Errorf("failed to load tasks: %v", err)
 	}
 
-	slog.Info("Task tracker initialized successfully", "file", tracker.File)
+	slog.Debug("Task tracker initialized successfully", "file", tracker.File)
 	return tracker, nil
 }

@@ -323,10 +323,6 @@ func importENEX(cmd *cobra.Command, args []string) {
 		slog.Info(fmt.Sprintf("Output to local storage is enabled. Target is: %v", settings.OutputFolder))
 	}
 
-	if settings.ExcludedOutputFolder != "" {
-		slog.Info(fmt.Sprintf("Excluded files output folder is enabled. Target is: %v", settings.ExcludedOutputFolder))
-	}
-
 	// Check if we're in directory mode
 	dirMode, _ := cmd.Flags().GetBool("dir")
 
@@ -393,9 +389,29 @@ func importENEX(cmd *cobra.Command, args []string) {
 		// Create a single EnexFile instance for all processing
 		inputFile := enex.NewEnexFile()
 
+		// Count total notes across all files first
+		var totalNotesAcrossFiles int
+		slog.Info("Counting notes in all ENEX files...")
+		for _, filePath := range enexFiles {
+			fileNotes, err := inputFile.CountNotes(filePath)
+			if err != nil {
+				slog.Error("failed to count notes in file", "error", err, "file", filePath)
+				continue
+			}
+			totalNotesAcrossFiles += fileNotes
+		}
+		slog.Info("Total notes across all files", "count", totalNotesAcrossFiles)
+
+		// Store the total in the atomic counter
+		inputFile.TotalNotesAll.Store(uint32(totalNotesAcrossFiles))
+		slog.Info("Total notes across all enex files", "count", inputFile.TotalNotesAll.Load())
+
+		// Reset the overall counter before processing
+		inputFile.CurrentNoteAll.Store(0)
+
 		// Process each file sequentially
 		for _, filePath := range enexFiles {
-			slog.Info("Processing ENEX file", "file", filePath)
+			slog.Info(":::::::::::::::::: Processing ENEX file ::::::::::::::::::", "file", filePath)
 
 			// Check if we need to add the filename as a tag
 			if settings.UseFilenameAsTag {
@@ -409,10 +425,7 @@ func importENEX(cmd *cobra.Command, args []string) {
 					config.SetAdditionalTags(newTags)
 				}
 
-				slog.Info("Additional tags", "tags", settings.AdditionalTags)
-				slog.Info("Tag name", "tag", tagName)
-				slog.Info("File path", "path", filePath)
-				slog.Info("Directory path", "path", dirPath)
+				slog.Info("Note Tags", "tags", append(settings.AdditionalTags, tagName))
 			}
 
 			// Process the file
@@ -454,6 +467,17 @@ func importENEX(cmd *cobra.Command, args []string) {
 	filePath := args[0]
 	inputFile := enex.NewEnexFile()
 
+	// For single file mode, count notes and set as both file total and overall total
+	totalNotes, err := inputFile.CountNotes(filePath)
+	if err != nil {
+		slog.Error("failed to count notes in file", "error", err)
+	} else {
+		// Store the total in the atomic counter for overall progress
+		inputFile.TotalNotesAll.Store(uint32(totalNotes))
+		// Reset the overall counter before processing
+		inputFile.CurrentNoteAll.Store(0)
+	}
+
 	// Process the single file
 	processEnexFile(cmd, inputFile, filePath, settings)
 
@@ -492,6 +516,16 @@ func findEnexFiles(dirPath string) ([]string, error) {
 
 // processEnexFile processes a single ENEX file
 func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath string, settings config.Config) {
+	// Count total notes in the file
+	totalNotes, err := inputFile.CountNotes(filePath)
+	if err != nil {
+		slog.Error("failed to count notes in file", "error", err)
+		totalNotes = 0 // Use 0 as fallback if counting fails
+	}
+
+	// Reset the current note counter for this file only
+	inputFile.CurrentNote.Store(0)
+
 	// prepare channels
 	noteChannel := make(chan enex.Note)
 	failedNoteChannel := make(chan enex.Note)
@@ -512,7 +546,7 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 	go func() {
 		// Register producer
 		logging.SetWorkerLogger(0)
-		slog.Info("Starting ENEX file processing", "file", filePath)
+		slog.Info("Starting ENEX file processing", "file", filePath, "total_notes", totalNotes)
 		err := inputFile.ReadFromFile(filePath, noteChannel)
 		if err != nil {
 			slog.Error("failed to read from file", "error", err)
@@ -536,9 +570,9 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 		go func(id int) {
 			// Register worker with its ID
 			logging.SetWorkerLogger(id)
-			slog.Info("Starting worker")
+			slog.Debug("Starting worker", "id", id)
 
-			err := inputFile.UploadFromNoteChannel(noteChannel, failedNoteChannel, settings.OutputFolder)
+			err := inputFile.UploadFromNoteChannel(noteChannel, failedNoteChannel, settings.OutputFolder, totalNotes)
 			if err != nil {
 				slog.Error("failed to upload resources", "error", err)
 				os.Exit(1)
@@ -573,6 +607,10 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 		slog.Warn("there have been errors, starting retry cycle", "errors", len(failedNotes))
 		PressKeyToContinue()
 
+		// Reset only the per-file counter for the retry cycle
+		inputFile.CurrentNote.Store(0)
+		// Don't reset the overall counter (CurrentNoteAll) as we're still processing the same notes
+
 		// all failed notes are now in failedNotes slice
 		// push notes that failed this Cycle into failedThisCycle slice
 		failedThisCycle := []enex.Note{}
@@ -606,7 +644,7 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 			// Register retry worker with ID 999
 			logging.SetWorkerLogger(999)
 			slog.Info("Starting retry worker")
-			err := inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, settings.OutputFolder)
+			err := inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, settings.OutputFolder, totalNotes)
 			if err != nil {
 				slog.Error("failed to upload resources", "error", err)
 				os.Exit(1)
