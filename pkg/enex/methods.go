@@ -305,17 +305,22 @@ func (e *EnexFile) convertIWorkFileToPDF(filePath string, baseFileName string, m
 // decodeBase64ResourceData handles the decoding of base64-encoded resource data
 // including padding, cleaning, validation, and decoding
 func (e *EnexFile) decodeBase64ResourceData(rawData string) ([]byte, error) {
-	// Add padding if necessary
-	data := rawData
-	padding := len(data) % 4
-	if padding > 0 {
-		slog.Debug("adding padding", "padding", padding)
-		data += strings.Repeat("=", 4-padding)
-	}
-
-	// Remove newlines and spaces from data
-	data = strings.ReplaceAll(data, "\n", "")
+	// Clean the data first (remove newlines and spaces)
+	data := strings.ReplaceAll(rawData, "\n", "")
 	data = strings.ReplaceAll(data, " ", "")
+
+	// Add padding if necessary
+	remainder := len(data) % 4
+	if remainder > 0 {
+		if remainder == 1 {
+			// Length mod 4 = 1 is not valid for base64
+			return nil, fmt.Errorf("invalid base64 data length")
+		}
+		// Add the correct number of padding characters
+		paddingNeeded := 4 - remainder
+		slog.Debug("adding padding", "padding_needed", paddingNeeded)
+		data += strings.Repeat("=", paddingNeeded)
+	}
 
 	// Validate that data is valid base64
 	validBase64 := regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
