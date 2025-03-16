@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -221,6 +222,28 @@ func main() {
 				config.SetExcludedOutputFolder(excludedOutput)
 			}
 
+			// set max retries
+			maxRetries, err := cmd.Flags().GetInt("max-retries")
+			if err != nil {
+				fmt.Println("Error retrieving max-retries flag:", err)
+				os.Exit(1)
+			}
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("max-retries") {
+				config.SetMaxRetries(maxRetries)
+			}
+
+			// set auto retry
+			autoRetry, err := cmd.Flags().GetBool("auto-retry")
+			if err != nil {
+				fmt.Println("Error retrieving auto-retry flag:", err)
+				os.Exit(1)
+			}
+			// Only override config if explicitly set on command line
+			if cmd.Flags().Changed("auto-retry") {
+				config.SetAutoRetry(autoRetry)
+			}
+
 			// The process-tasks flag is already defined at the root level, no need to define it again here
 		},
 
@@ -276,11 +299,107 @@ func main() {
 	var dirMode bool
 	rootCmd.PersistentFlags().BoolVarP(&dirMode, "dir", "d", false, "process all ENEX files in the specified directory without prompting for confirmation")
 
+	var maxRetries int
+	rootCmd.PersistentFlags().IntVar(&maxRetries, "max-retries", 1, "Maximum number of retry attempts for failed notes")
+
+	var autoRetry bool
+	rootCmd.PersistentFlags().BoolVar(&autoRetry, "auto-retry", true, "Automatically retry failed notes without prompting")
+
 	// run root command
 	err := rootCmd.Execute()
 	if err != nil {
 		fmt.Println("Error executing command:", err)
 		os.Exit(1)
+	}
+}
+
+// processAndRetry processes files, collects failed notes, runs retries, and returns permanently failed notes
+func processAndRetry(inputFile *enex.EnexFile, filePaths []string, settings config.Config, totalNotes int) []FailedNoteInfo {
+	// Collect all failed notes from all files
+	var allFailedNotes []FailedNoteInfo
+
+	// Process each file sequentially
+	for _, filePath := range filePaths {
+		slog.Info(":::::::::::::::::: Processing ENEX file ::::::::::::::::::", "file", filePath)
+
+		// Check if we need to add the filename as a tag
+		if settings.UseFilenameAsTag {
+			// Extract filename without path and extension
+			baseName := filepath.Base(filePath)
+			tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+
+			// Add to additional tags if not already added by the command-line flag
+			if !contains(settings.AdditionalTags, tagName) {
+				newTags := append(settings.AdditionalTags, tagName)
+				config.SetAdditionalTags(newTags)
+			}
+
+			slog.Info("Note Tags", "tags", append(settings.AdditionalTags, tagName))
+		}
+
+		// Process the file and collect failed notes
+		failedNotes := processEnexFile(inputFile, filePath, settings)
+
+		// Add failed notes from this file to the collection
+		allFailedNotes = append(allFailedNotes, failedNotes...)
+	}
+
+	// Process pending tasks and link documents after all files are processed
+	logging.SetWorkerLogger(0) // Use main process ID for this
+	slog.Info("Processing pending tasks and linking documents")
+	if err := inputFile.ProcessPendingTasks(); err != nil {
+		slog.Error("failed to process pending tasks and link documents", "error", err)
+	}
+
+	// Process retries for all failed notes
+	var permanentlyFailedNotes []FailedNoteInfo
+	if len(allFailedNotes) > 0 {
+		slog.Info("🔄🔄🔄🔄🔄🔄🔄 Processing retries for failed notes 🔄🔄🔄🔄🔄🔄🔄", "count", len(allFailedNotes))
+		permanentlyFailedNotes = processRetries(inputFile, allFailedNotes, settings.OutputFolder, totalNotes)
+	}
+
+	return permanentlyFailedNotes
+}
+
+// displayFailedNotesSummary displays a summary of failed notes
+func displayFailedNotesSummary(permanentlyFailedNotes []FailedNoteInfo) {
+	if len(permanentlyFailedNotes) > 0 {
+		slog.Warn("Some notes failed to be uploaded after all retry attempts", "count", len(permanentlyFailedNotes))
+		slog.Info("❗❗❗❗❗❗ FAILED NOTES SUMMARY ❗❗❗❗❗❗")
+		slog.Info("Total failed notes", "count", len(permanentlyFailedNotes))
+
+		// Group failed notes by source file, ensuring uniqueness by title
+		failedBySource := make(map[string]map[string]bool)
+		for _, noteInfo := range permanentlyFailedNotes {
+			sourceFile := filepath.Base(noteInfo.SourceFile)
+
+			// Initialize the map for this source file if it doesn't exist
+			if _, exists := failedBySource[sourceFile]; !exists {
+				failedBySource[sourceFile] = make(map[string]bool)
+			}
+
+			// Add the note title to the map for this source file
+			failedBySource[sourceFile][noteInfo.Note.Title] = true
+		}
+
+		// Print grouped by source file
+		for sourceFile, noteTitles := range failedBySource {
+			slog.Info("ENEX File", "file", sourceFile)
+
+			// Convert map keys to a sorted slice for consistent output
+			var titles []string
+			for title := range noteTitles {
+				titles = append(titles, title)
+			}
+			sort.Strings(titles)
+
+			for i, noteTitle := range titles {
+				slog.Info(fmt.Sprintf("    %d. %s", i+1, noteTitle))
+			}
+		}
+		slog.Info("❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗❗")
+	} else {
+		slog.Info("All notes were processed successfully")
 	}
 }
 
@@ -409,47 +528,11 @@ func importENEX(cmd *cobra.Command, args []string) {
 		// Reset the overall counter before processing
 		inputFile.CurrentNoteAll.Store(0)
 
-		// Collect all failed notes from all files
-		var allFailedNotes []enex.Note
+		// Process all files, run retries, and get permanently failed notes
+		permanentlyFailedNotes := processAndRetry(inputFile, enexFiles, settings, totalNotesAcrossFiles)
 
-		// Process each file sequentially
-		for _, filePath := range enexFiles {
-			slog.Info(":::::::::::::::::: Processing ENEX file ::::::::::::::::::", "file", filePath)
-
-			// Check if we need to add the filename as a tag
-			if settings.UseFilenameAsTag {
-				// Extract filename without path and extension
-				baseName := filepath.Base(filePath)
-				tagName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-
-				// Add to additional tags if not already added by the command-line flag
-				if !contains(settings.AdditionalTags, tagName) {
-					newTags := append(settings.AdditionalTags, tagName)
-					config.SetAdditionalTags(newTags)
-				}
-
-				slog.Info("Note Tags", "tags", append(settings.AdditionalTags, tagName))
-			}
-
-			// Process the file and collect failed notes
-			failedNotes := processEnexFile(cmd, inputFile, filePath, settings)
-
-			// Add failed notes from this file to the collection
-			allFailedNotes = append(allFailedNotes, failedNotes...)
-		}
-
-		// Process pending tasks and link documents after all files are processed
-		logging.SetWorkerLogger(0) // Use main process ID for this
-		slog.Info("Processing pending tasks and linking documents for all files")
-		if err := inputFile.ProcessPendingTasks(); err != nil {
-			slog.Error("failed to process pending tasks and link documents", "error", err)
-		}
-
-		// Process retries for all failed notes from all files
-		if len(allFailedNotes) > 0 {
-			slog.Info("Processing retries for all failed notes", "count", len(allFailedNotes))
-			processRetries(inputFile, allFailedNotes, settings.OutputFolder, totalNotesAcrossFiles)
-		}
+		// Display summary of failed notes
+		displayFailedNotesSummary(permanentlyFailedNotes)
 
 		slog.Info("All ENEX files processed successfully")
 		return
@@ -490,23 +573,13 @@ func importENEX(cmd *cobra.Command, args []string) {
 		inputFile.CurrentNoteAll.Store(0)
 	}
 
-	// Process the single file and collect failed notes
-	failedNotes := processEnexFile(cmd, inputFile, filePath, settings)
+	// Process the single file, run retries, and get permanently failed notes
+	permanentlyFailedNotes := processAndRetry(inputFile, []string{filePath}, settings, totalNotes)
 
-	// Process pending tasks and link documents
-	logging.SetWorkerLogger(0) // Use main process ID for this
-	slog.Info("Processing pending tasks and linking documents")
-	if err := inputFile.ProcessPendingTasks(); err != nil {
-		slog.Error("failed to process pending tasks and link documents", "error", err)
-	}
+	// Display summary of failed notes
+	displayFailedNotesSummary(permanentlyFailedNotes)
 
-	// Process retries for failed notes
-	if len(failedNotes) > 0 {
-		slog.Info("Processing retries for failed notes", "count", len(failedNotes))
-		processRetries(inputFile, failedNotes, settings.OutputFolder, totalNotes)
-	}
-
-	slog.Info("ENEX processing done")
+	slog.Info("ENEX processing done", "file", filePath)
 }
 
 // findEnexFiles finds all .enex files in the specified directory (non-recursive)
@@ -532,8 +605,14 @@ func findEnexFiles(dirPath string) ([]string, error) {
 	return enexFiles, nil
 }
 
+// Define a struct to track failed notes with their source file
+type FailedNoteInfo struct {
+	Note       enex.Note
+	SourceFile string
+}
+
 // processEnexFile processes a single ENEX file
-func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath string, settings config.Config) []enex.Note {
+func processEnexFile(inputFile *enex.EnexFile, filePath string, settings config.Config) []FailedNoteInfo {
 	// Count total notes in the file
 	totalNotes, err := inputFile.CountNotes(filePath)
 	if err != nil {
@@ -616,35 +695,68 @@ func processEnexFile(cmd *cobra.Command, inputFile *enex.EnexFile, filePath stri
 		slog.Int("totalFiles", int(inputFile.Uploads.Load())),
 	)
 
-	// Return failed notes instead of processing them immediately
-	return failedNotes
+	// Convert failed notes to FailedNoteInfo with source file information
+	var failedNoteInfos []FailedNoteInfo
+	for _, note := range failedNotes {
+		failedNoteInfos = append(failedNoteInfos, FailedNoteInfo{
+			Note:       note,
+			SourceFile: filePath,
+		})
+	}
+
+	// Return failed notes with source file information
+	return failedNoteInfos
 }
 
 // processRetries processes all failed notes from all files
-func processRetries(inputFile *enex.EnexFile, allFailedNotes []enex.Note, outputFolder string, totalNotes int) {
+func processRetries(inputFile *enex.EnexFile, allFailedNotes []FailedNoteInfo, outputFolder string, totalNotes int) []FailedNoteInfo {
 	// If no failed notes, return early
 	if len(allFailedNotes) == 0 {
-		return
+		return nil
 	}
 
+	settings, _ := config.GetConfig()
+	slog.Info("Retry settings", "max_retries", settings.MaxRetries, "auto_retry", settings.AutoRetry)
+
 	failedNotes := allFailedNotes
+	var permanentlyFailedNotes []FailedNoteInfo
+	retryCount := 0
 
 	for {
 		// if we still have failedNotes in this iteration, keep going
 		if len(failedNotes) == 0 {
+			slog.Info("No more failed notes to retry")
 			break
 		}
 
-		slog.Warn("there have been errors, starting retry cycle", "errors", len(failedNotes))
-		PressKeyToContinue()
+		if retryCount >= settings.MaxRetries {
+			slog.Info("Maximum retry attempts reached", "max_retries", settings.MaxRetries)
+			// Add remaining failed notes to the permanently failed list
+			permanentlyFailedNotes = failedNotes
+			break
+		}
+
+		retryCount++
+		slog.Info("Starting retry cycle", "attempt", retryCount, "of", settings.MaxRetries, "errors", len(failedNotes))
+
+		// If not auto-retry, prompt the user
+		if !settings.AutoRetry {
+			PressKeyToContinue()
+		}
 
 		// Reset only the per-file counter for the retry cycle
 		inputFile.CurrentNote.Store(0)
 		// Don't reset the overall counter (CurrentNoteAll) as we're still processing the same notes
 
-		// all failed notes are now in failedNotes slice
+		// Extract notes from FailedNoteInfo for processing
+		var notesToRetry []enex.Note
+		for _, noteInfo := range failedNotes {
+			notesToRetry = append(notesToRetry, noteInfo.Note)
+		}
+
+		// all failed notes are now in notesToRetry slice
 		// push notes that failed this Cycle into failedThisCycle slice
-		failedThisCycle := []enex.Note{}
+		var failedThisCycle []enex.Note
 
 		// reset failedNoteChannel
 		failedNoteChannel := make(chan enex.Note)
@@ -660,13 +772,13 @@ func processRetries(inputFile *enex.EnexFile, allFailedNotes []enex.Note, output
 			failedNoteSignal <- true
 		}()
 
-		// this feeds the failedNotes into the Retry Channel
+		// this feeds the notesToRetry into the Retry Channel
 		retryChannel := make(chan enex.Note)
 		go func() {
 			// Register retry feeder
 			logging.SetWorkerLogger(0)
 			slog.Debug("Starting retry feeder")
-			enex.RetryFeeder(&failedNotes, retryChannel)
+			enex.RetryFeeder(&notesToRetry, retryChannel)
 			slog.Debug("Retry feeder finished")
 		}()
 
@@ -675,8 +787,8 @@ func processRetries(inputFile *enex.EnexFile, allFailedNotes []enex.Note, output
 		wg.Add(1)
 		go func() {
 			// Register retry worker with ID 999
-			logging.SetWorkerLogger(999)
-			slog.Info("Starting retry worker")
+			logging.SetWorkerLogger(0)
+			slog.Info("Starting retry worker", "attempt", retryCount, "of", settings.MaxRetries)
 			err := inputFile.UploadFromNoteChannel(retryChannel, failedNoteChannel, outputFolder, totalNotes)
 			if err != nil {
 				slog.Error("failed to upload resources", "error", err)
@@ -695,9 +807,33 @@ func processRetries(inputFile *enex.EnexFile, allFailedNotes []enex.Note, output
 		// then we wait for the FailedNoteCatcher to stop
 		<-failedNoteSignal
 
+		// Log the results of this retry attempt
+		slog.Info("Retry cycle completed",
+			"attempt", retryCount,
+			"of", settings.MaxRetries,
+			"original_failed", len(failedNotes),
+			"still_failed", len(failedThisCycle),
+			"succeeded", len(failedNotes)-len(failedThisCycle))
+
+		// Create a map to track which notes failed this cycle
+		failedThisCycleMap := make(map[string]bool)
+		for _, note := range failedThisCycle {
+			failedThisCycleMap[note.Title] = true
+		}
+
+		// Create a new slice of FailedNoteInfo for notes that failed this cycle
+		var failedNoteInfosThisCycle []FailedNoteInfo
+		for _, noteInfo := range failedNotes {
+			if failedThisCycleMap[noteInfo.Note.Title] {
+				failedNoteInfosThisCycle = append(failedNoteInfosThisCycle, noteInfo)
+			}
+		}
+
 		// we move the notes that failed this cycle into the failedNotes variable
-		failedNotes = failedThisCycle
+		failedNotes = failedNoteInfosThisCycle
 	}
+
+	return permanentlyFailedNotes
 }
 
 func PressKeyToContinue() {

@@ -29,7 +29,7 @@ type Config struct {
 	ExcludeFileTypes       []string // File types to exclude when using "any" in FileTypes
 	OutputFolder           string
 	ExcludedOutputFolder   string // Folder to store excluded files that don't match allowed file types
-	NoNameFolder           string // Folder to store files with no filenames
+	NoNameFolder           string // Folder to store files with no original filename
 	AdditionalTags         []string
 	Unzip                  bool
 	LinkFieldID            int    // Custom field ID for document linking
@@ -39,6 +39,8 @@ type Config struct {
 	ConcurrentWorkers      int    // Number of concurrent workers
 	UseFilenameAsTag       bool   // Whether to use the ENEX filename as a tag
 	CorrespondentTagPrefix string // Prefix for tags to be used as correspondents
+	MaxRetries             int    // Maximum number of retry attempts for failed notes
+	AutoRetry              bool   // Whether to automatically retry failed notes without prompting
 }
 
 // GetConfig initializes and returns the application configuration.
@@ -48,6 +50,10 @@ type Config struct {
 // loaded, an error will be returned.
 func GetConfig() (Config, error) {
 	once.Do(func() {
+		// Set default values
+		settings.MaxRetries = 1
+		settings.AutoRetry = true
+
 		// Load YAML configuration
 		err := k.Load(file.Provider("config.yaml"), yaml.Parser())
 		if err != nil {
@@ -160,4 +166,14 @@ func SetNoNameFolder(folder string) {
 // SetExcludedOutputFolder sets the folder for storing excluded files.
 func SetExcludedOutputFolder(folder string) {
 	settings.ExcludedOutputFolder = folder
+}
+
+// SetMaxRetries sets the maximum number of retry attempts
+func SetMaxRetries(retries int) {
+	settings.MaxRetries = retries
+}
+
+// SetAutoRetry sets whether to automatically retry failed notes
+func SetAutoRetry(autoRetry bool) {
+	settings.AutoRetry = autoRetry
 }

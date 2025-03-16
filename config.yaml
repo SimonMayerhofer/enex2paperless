@@ -39,6 +39,8 @@ FileTypes: # either file extension or mime type.
 #   - tag1
 #   - tag2
 # Unzip: true                 # Whether to unzip .zip files found in notes
+# AutoRetry: true               # Whether to automatically retry failed notes
+# MaxRetries: 1                 # Maximum number of retry attempts for failed notes
 # LinkFieldID: 0              # Custom field ID for document linking
 # TitlePrefix: true           # Whether to prefix filenames with note titles
 # ConvertMarkdown: true       # Whether to convert note content to markdown

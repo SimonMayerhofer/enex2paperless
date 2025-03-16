@@ -762,6 +762,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 					// Create a reader from the byte slice to inspect zip contents
 					zipReader, err := zip.NewReader(bytes.NewReader(decodedData), int64(len(decodedData)))
 					if err != nil {
+						failedNoteChannel <- note
 						slog.Error("failed to create zip reader", "error", err)
 						continue
 					}
@@ -784,6 +785,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 
 					extractedFiles, err := helpers.UnzipFile(decodedData, extractDir, e.Fs, resource.ResourceAttributes.FileName, note.Title)
 					if err != nil {
+						failedNoteChannel <- note
 						slog.Error("failed to extract zip file", "error", err)
 						continue
 					}
@@ -795,6 +797,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 						// Check if this file type should be processed
 						isAllowed, err := helpers.IsAllowedFileType(file.MimeType, file.Name)
 						if err != nil {
+							failedNoteChannel <- note
 							slog.Error("error when handling MIME type", "error", err)
 							continue
 						}
@@ -897,6 +900,7 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 
 						_, err = paperless.UploadFile(e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 						if err != nil {
+							failedNoteChannel <- note
 							slog.Error("failed to upload extracted file", "error", err)
 						}
 						// Add file to cleanup list if it's in a temporary directory

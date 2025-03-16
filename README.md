@@ -4,7 +4,7 @@
 
 CLI tool to help migrate attachements from Evernote notes to Paperless-NGX. It parses ENEX files and uses the Paperless API to upload the contents. It goes through the ENEX file, looks for notes containing allowed file types and extracts those files and uploads them to Paperless.
 
-This tool was initially created by [kevinzehnder](https://github.com/kevinzehnder/enex2paperless/) but I added some additional features:
+This tool was initially created by [kevinzehnder](https://github.com/kevinzehnder/enex2paperless/) but has additional features including:
 
 - ✅ **Link documents** from the same note together using a custom field.
 - ✅ **Convert note content** to Markdown format. So not only attachments are uploaded but also the content.
@@ -32,6 +32,7 @@ Usage:
   enex2paperless [file path] [flags]
 
 Flags:
+      --auto-retry               Automatically retry failed notes without prompting (default true)
   -c, --concurrent int           Number of concurrent consumers (default 1)
       --convert-apple-pdf        Convert Apple iWork files to PDF
   -d, --dir                      Process all ENEX files in a specified directory without prompting for confirmation
@@ -40,6 +41,7 @@ Flags:
       --correspondent-tag-prefix Prefix for tags to be used as correspondents
   -h, --help                     help for enex2paperless
   -l, --link int                 Custom field ID for document linking
+      --max-retries int          Maximum number of retry attempts for failed notes (default 1)
   -n, --nocolor                  Disable colored output
       --noname string            Folder to save files with no original filename
   -o, --outputfolder string      Output attachements to this folder, NOT paperless.
@@ -99,6 +101,8 @@ ConcurrentWorkers: 1        # Number of concurrent workers
 CorrespondentTagPrefix: ""  # Prefix for tags to be used as correspondents
 ExcludedOutputFolder: ""    # Folder to save excluded files
 LinkFieldID: 0              # Custom field ID for document linking
+MaxRetries: 1               # Maximum number of retry attempts for failed notes
+AutoRetry: true             # Whether to automatically retry failed notes
 NoNameFolder: ""            # Folder to save files with no original filename
 OutputFolder: ""            # Output to folder instead of Paperless
 TitlePrefix: false          # Whether to prefix filenames with note titles
@@ -113,6 +117,7 @@ The following table shows the mapping between config.yaml settings and command-l
 | config.yaml setting    | Command-line argument       | Description |
 |------------------------|-----------------------------|-------------|
 | AdditionalTags         | -t, --tags                  | Additional tags to add to all documents |
+| AutoRetry              | --auto-retry                | Automatically retry failed notes without prompting |
 | ConvertMarkdown        | -m, --convert-markdown      | Convert note content to markdown |
 | ConvertAppleToPDF      | --convert-apple-pdf         | Convert Apple iWork files to PDF |
 | ConcurrentWorkers      | -c, --concurrent            | Number of concurrent workers |
@@ -120,6 +125,7 @@ The following table shows the mapping between config.yaml settings and command-l
 | N/A                    | -d, --dir                   | Process all ENEX files in the specified directory without prompting for confirmation |
 | ExcludedOutputFolder   | -e, --excluded-outputfolder | Folder to save excluded files |
 | LinkFieldID            | -l, --link                  | Custom field ID for document linking |
+| MaxRetries             | --max-retries               | Maximum number of retry attempts for failed notes |
 | NoNameFolder           | --noname                    | Folder to save files with no original filename |
 | OutputFolder           | -o, --outputfolder          | Output attachements to this folder, NOT paperless |
 | TitlePrefix            | --titleprefix               | Prefix filenames with note titles |
@@ -374,6 +380,46 @@ This is particularly useful for:
 3. Finding files you might want to include in future runs
 
 This feature works alongside both the regular Paperless upload mode and the `OutputFolder` option.
+
+### Retry Settings for Failed Notes
+
+When processing notes, some uploads might fail due to temporary issues like network problems or server load. The tool includes retry functionality to handle these cases automatically.
+
+You can configure the retry behavior using two settings:
+
+#### Maximum Retry Attempts
+
+You can set the maximum number of times the tool will attempt to retry failed notes using the `--max-retries` flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex --max-retries 3
+```
+
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+MaxRetries: 3
+```
+
+By default, this is set to 1 retry attempt.
+
+#### Automatic Retry
+
+By default, the tool will automatically retry failed notes without prompting. You can disable this behavior and require manual confirmation before each retry cycle using the `--auto-retry` flag:
+
+```shell
+enex2paperless.exe MyEnexFile.enex --auto-retry=false
+```
+
+Alternatively, you can set this in your `config.yaml` file:
+
+```yaml
+AutoRetry: false
+```
+
+When automatic retry is disabled, you'll be prompted to continue or exit after each retry cycle.
+
+The tool will display a summary of failed notes at the end of processing, grouped by source file, making it easy to identify which notes had persistent issues.
 
 ### Apple iWork Files Conversion
 
