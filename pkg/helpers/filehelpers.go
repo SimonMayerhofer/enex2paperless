@@ -125,6 +125,12 @@ func UnzipFile(data []byte, destDir string, fs afero.Fs, zipFileName string, not
 		// Create the file path
 		filePath := filepath.Join(destDir, uploadFileName)
 
+		// Create parent directories if they don't exist
+		parentDir := filepath.Dir(filePath)
+		if err := fs.MkdirAll(parentDir, 0755); err != nil {
+			return extractedFiles, fmt.Errorf("failed to create parent directory: %v", err)
+		}
+
 		// Read the file contents
 		var buf bytes.Buffer
 		_, err = io.Copy(&buf, rc)

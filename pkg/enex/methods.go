@@ -253,12 +253,79 @@ func (e *EnexFile) convertIWorkFileToPDF(filePath string, baseFileName string, m
 
 	// If this is a temp file and we have an output folder, copy to the output folder
 	if outputFolder != "" && strings.Contains(newFilePath, os.TempDir()) {
+		// Preserve the directory structure by getting the relative path
+		// First, get the base name of the PDF file
 		pdfOutputName := filepath.Base(newFilePath)
-		pdfOutputPath := filepath.Join(outputFolder, pdfOutputName)
+
+		// If the original file was in a subdirectory of the extraction directory,
+		// preserve that structure in the output folder
+		var finalOutputPath string
+
+		// Check if the original file was in a subdirectory
+		if filepath.Dir(filePath) != os.TempDir() && !strings.HasPrefix(filepath.Dir(filePath), outputFolder) {
+			// Get the relative directory structure from the temp directory
+			relDir := ""
+
+			// If the file is in a subdirectory of the temp directory, extract that part
+			tempDirPath := os.TempDir()
+			if strings.HasPrefix(filePath, tempDirPath) {
+				// Get the part of the path after the temp directory
+				relPath := strings.TrimPrefix(filePath, tempDirPath)
+				// Remove any leading separator
+				relPath = strings.TrimPrefix(relPath, string(os.PathSeparator))
+				// Get the directory part (excluding the filename)
+				relDir = filepath.Dir(relPath)
+				// If relDir is just ".", use empty string
+				if relDir == "." {
+					relDir = ""
+				}
+			} else {
+				// For other cases, just use the directory name from the original path
+				relDir = filepath.Base(filepath.Dir(filePath))
+			}
+
+			// Create the full output path with the preserved directory structure
+			if relDir != "" {
+				// Create the subdirectory in the output folder
+				subDir := filepath.Join(outputFolder, relDir)
+				if err := e.Fs.MkdirAll(subDir, 0755); err != nil {
+					slog.Error("failed to create subdirectory in output folder",
+						"error", err,
+						"subdir", subDir)
+				}
+				finalOutputPath = filepath.Join(subDir, pdfOutputName)
+			} else {
+				finalOutputPath = filepath.Join(outputFolder, pdfOutputName)
+			}
+		} else {
+			// For files directly in the extraction directory, we need to determine if they
+			// should be placed in a specific subdirectory in the output folder
+
+			// Check if the file is part of a zip extraction
+			dirName := filepath.Base(filepath.Dir(filePath))
+			if dirName != "." && dirName != "/" && dirName != filepath.Base(os.TempDir()) {
+				// This is likely a subdirectory created during zip extraction
+				// Create the same subdirectory in the output folder
+				subDir := filepath.Join(outputFolder, dirName)
+				if err := e.Fs.MkdirAll(subDir, 0755); err != nil {
+					slog.Error("failed to create subdirectory in output folder",
+						"error", err,
+						"subdir", subDir)
+				}
+				finalOutputPath = filepath.Join(subDir, pdfOutputName)
+
+				slog.Debug("preserving zip extraction directory structure",
+					"original_dir", dirName,
+					"output_path", finalOutputPath)
+			} else {
+				// No subdirectory structure to preserve
+				finalOutputPath = filepath.Join(outputFolder, pdfOutputName)
+			}
+		}
 
 		// Check for file existence and handle duplicates
-		finalOutputPath := pdfOutputPath
 		counter := 1
+		originalFinalOutputPath := finalOutputPath
 
 		for {
 			exists, _ := afero.Exists(e.Fs, finalOutputPath)
@@ -269,7 +336,7 @@ func (e *EnexFile) convertIWorkFileToPDF(filePath string, baseFileName string, m
 			// Files are different, try next suffix
 			ext := filepath.Ext(pdfOutputName)
 			nameWithoutExt := strings.TrimSuffix(pdfOutputName, ext)
-			finalOutputPath = filepath.Join(outputFolder, fmt.Sprintf("%s-%d%s", nameWithoutExt, counter, ext))
+			finalOutputPath = filepath.Join(filepath.Dir(originalFinalOutputPath), fmt.Sprintf("%s-%d%s", nameWithoutExt, counter, ext))
 			counter++
 		}
 
@@ -495,9 +562,35 @@ func (e *EnexFile) convertIWorkDataToPDF(
 		return fileData, mimeType, originalFilename, false, err
 	}
 
-	// Use exact filename in the temporary directory
+	// Extract the directory structure from the original filename if it contains path separators
+	var subDir string
 	exactFilename := filepath.Base(originalFilename)
-	tempFilePath := filepath.Join(tempDir, exactFilename)
+
+	// Check if the original filename contains directory information
+	if filepath.Dir(originalFilename) != "." && filepath.Dir(originalFilename) != "/" {
+		// Get the directory part of the original filename
+		subDir = filepath.Dir(originalFilename)
+
+		// Create the subdirectory structure in the temp directory
+		fullSubDir := filepath.Join(tempDir, subDir)
+		if err := os.MkdirAll(fullSubDir, 0755); err != nil {
+			os.RemoveAll(tempDir) // Clean up on error
+			slog.Error("failed to create subdirectory structure in temp dir", "error", err)
+			return fileData, mimeType, originalFilename, false, err
+		}
+
+		slog.Debug("created subdirectory structure in temp dir",
+			"subdir", subDir,
+			"full_path", fullSubDir)
+	}
+
+	// Use exact filename in the temporary directory, preserving subdirectory structure if any
+	var tempFilePath string
+	if subDir != "" {
+		tempFilePath = filepath.Join(tempDir, subDir, exactFilename)
+	} else {
+		tempFilePath = filepath.Join(tempDir, exactFilename)
+	}
 
 	// Write the data to the temporary file with exact name
 	if err := os.WriteFile(tempFilePath, fileData, 0644); err != nil {
@@ -547,7 +640,18 @@ func (e *EnexFile) convertIWorkDataToPDF(
 			// Update return values with PDF data
 			resultData = pdfData
 			resultMimeType = pdfMimeType
-			resultFilename = filepath.Base(pdfFilePath)
+
+			// Preserve the directory structure in the result filename if needed
+			if subDir != "" && !strings.Contains(pdfFilePath, subDir) {
+				// If the PDF path doesn't already contain the subdirectory, add it back
+				pdfBaseName := filepath.Base(pdfFilePath)
+				resultFilename = filepath.Join(subDir, pdfBaseName)
+				slog.Debug("preserving directory structure in result filename",
+					"original_path", pdfFilePath,
+					"result_filename", resultFilename)
+			} else {
+				resultFilename = filepath.Base(pdfFilePath)
+			}
 
 			slog.Info("successfully converted file to PDF",
 				"original_file", originalFilename,
@@ -781,6 +885,21 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 					extractDir := outputFolder
 					if extractDir == "" {
 						extractDir = os.TempDir()
+					} else {
+						// If output folder is set, create a subdirectory for this zip file
+						zipBaseName := strings.TrimSuffix(resource.ResourceAttributes.FileName, filepath.Ext(resource.ResourceAttributes.FileName))
+						extractDir = filepath.Join(outputFolder, zipBaseName)
+
+						// Create the extraction directory
+						if err := e.Fs.MkdirAll(extractDir, 0755); err != nil {
+							failedNoteChannel <- note
+							slog.Error("failed to create extraction directory", "error", err)
+							continue
+						}
+
+						slog.Debug("created extraction directory for zip file",
+							"zip_file", resource.ResourceAttributes.FileName,
+							"extract_dir", extractDir)
 					}
 
 					extractedFiles, err := helpers.UnzipFile(decodedData, extractDir, e.Fs, resource.ResourceAttributes.FileName, note.Title)
@@ -863,26 +982,62 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 						uploadMimeType := file.MimeType
 						uploadFileName := file.Name
 
-						// Use the improved handler function for PDF conversion
-						convertedData, convertedMimeType, convertedFilename, converted, _ := e.convertIWorkDataToPDF(
-							file.Data,
-							file.Name,
-							file.MimeType,
-							note.Created,
-							"", // No explicit timestamp string
-							file.FileTime,
-							outputFolder,
-						)
+						// If we're using an output folder and this is an iWork file, convert it directly
+						// This ensures the PDF is saved in the correct location
+						if outputFolder != "" && isIWorkFile && settings.ConvertAppleToPDF {
+							// Get the file path where the file was extracted
+							filePath := file.Path
 
-						if converted {
-							uploadData = convertedData
-							uploadMimeType = convertedMimeType
-							uploadFileName = convertedFilename
+							slog.Debug("converting extracted iWork file to PDF",
+								"file_path", filePath,
+								"file_name", file.Name,
+								"mime_type", file.MimeType)
 
-							// If we're using an output folder, the file is already saved
-							if outputFolder != "" {
-								// Skip upload to Paperless - we've saved to the file system
+							// Convert the file to PDF using the direct file path
+							_, pdfFilePath, converted, err := e.convertIWorkFileToPDF(
+								filePath,
+								file.Name,
+								file.MimeType,
+								note.Created,
+								"", // No explicit resource timestamp string
+								"", // No output folder - we're already in the right folder
+							)
+
+							if err != nil {
+								slog.Error("failed to convert extracted iWork file to PDF",
+									"error", err,
+									"file", filePath)
+							} else if converted {
+								slog.Info("successfully converted extracted iWork file to PDF",
+									"original_file", file.Name,
+									"pdf_file", filepath.Base(pdfFilePath),
+									"pdf_path", pdfFilePath)
+
+								// Skip further processing since the file has been converted and saved
 								continue
+							}
+						} else {
+							// Use the improved handler function for PDF conversion
+							convertedData, convertedMimeType, convertedFilename, converted, _ := e.convertIWorkDataToPDF(
+								file.Data,
+								file.Name,
+								file.MimeType,
+								note.Created,
+								"", // No explicit resourcetimestamp string
+								file.FileTime,
+								outputFolder,
+							)
+
+							if converted {
+								uploadData = convertedData
+								uploadMimeType = convertedMimeType
+								uploadFileName = convertedFilename
+
+								// If we're using an output folder, the file is already saved
+								if outputFolder != "" {
+									// Skip upload to Paperless - we've saved to the file system
+									continue
+								}
 							}
 						}
 
