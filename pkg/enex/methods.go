@@ -1041,9 +1041,6 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 							}
 						}
 
-						fileNameWithoutExt := strings.TrimSuffix(uploadFileName, filepath.Ext(uploadFileName))
-						zipFileNameWithoutExt := strings.TrimSuffix(file.ZipFileName, filepath.Ext(file.ZipFileName))
-
 						// If we're using an output folder, we've already saved the extracted files
 						// No need to upload them to Paperless
 						if outputFolder != "" {
@@ -1053,7 +1050,26 @@ func (e *EnexFile) UploadFromNoteChannel(noteChannel <-chan Note, failedNoteChan
 							continue
 						}
 
-						_, err = paperless.UploadFile(e.client, note.Title+" | "+zipFileNameWithoutExt+" | "+fileNameWithoutExt, uploadFileName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
+						// When uploading to Paperless, ensure we only use the base filename without any directory path
+						// This prevents subdirectory paths from being included in the document title
+						uploadFileBaseName := filepath.Base(uploadFileName)
+						fileNameWithoutExtBase := strings.TrimSuffix(uploadFileBaseName, filepath.Ext(uploadFileBaseName))
+						zipFileNameWithoutExt := strings.TrimSuffix(file.ZipFileName, filepath.Ext(file.ZipFileName))
+
+						// Construct the document title, avoiding duplication when note title and zip filename are the same
+						var documentTitle string
+						if strings.EqualFold(note.Title, zipFileNameWithoutExt) {
+							// If note title and zip filename are the same, don't duplicate
+							documentTitle = note.Title + " | " + fileNameWithoutExtBase
+							slog.Debug("avoiding title duplication",
+								"note_title", note.Title,
+								"zip_filename", zipFileNameWithoutExt)
+						} else {
+							// Otherwise include all parts
+							documentTitle = note.Title + " | " + zipFileNameWithoutExt + " | " + fileNameWithoutExtBase
+						}
+
+						_, err = paperless.UploadFile(e.client, documentTitle, uploadFileBaseName, uploadMimeType, uploadData, note, url, e.taskTracker, failedNoteChannel)
 						if err != nil {
 							failedNoteChannel <- note
 							slog.Error("failed to upload extracted file", "error", err)
