@@ -13,12 +13,12 @@ tasks:
     desc: Start Test Instance
     cmds:
       - sudo nerdctl compose up -d
-      
+
   paperless:down:
     desc: Kill Test Instance
     cmds:
       - sudo nerdctl compose down -v
-  
+
   release:
     desc: Use goreleaser to create a release
     preconditions:
@@ -66,10 +66,10 @@ tasks:
   build:all:
     desc: Build for all OS
     cmds:
-      - task: build_windows
-      - task: build_linux
-      - task: build_darwin
-      
+      - task: build:windows
+      - task: build:linux
+      - task: build:darwin
+
   test:
     desc: Run all tests with verbose output
     dir: .
